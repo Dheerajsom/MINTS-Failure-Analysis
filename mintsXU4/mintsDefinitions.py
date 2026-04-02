@@ -67,7 +67,6 @@ def findMacAddress():
 
     return "xxxxxxxx"
 
-
 fPortIDs                  = yaml.load(open('mintsXU4/credentials/portIDs.yml'),Loader=yaml.FullLoader)['portIDs']
 mintsDefinitions         = yaml.load(open('mintsXU4/credentials/mintsDefinitions.yaml'),Loader=yaml.FullLoader)
 
@@ -86,8 +85,8 @@ macAddress            = findMacAddress()
 latestDisplayOn       = False
 latestOn              = False
 airmarPort            = findAirmarPort()
-# For MQTT 
 
+# For MQTT 
 mqttOn                = True
 mqttCredentialsFile   = 'mintsXU4/credentials.yml'
 mqttBroker            = "mqtt.circ.utdallas.edu"
