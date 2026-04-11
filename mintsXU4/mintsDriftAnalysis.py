@@ -21,37 +21,71 @@ from typing import Optional
 import warnings
 import traceback
 import json
+import ssl
+import time
 
-from mintsXU4 import mintsDefinitions  as mD
-from mintsXU4 import mintsSensorReader as mSR
-from mintsXU4 import mintsLatest       as mL
+
+from mintsXU4 import mintsLatest as mL
 from mintsXU4.mintsSensorReader import sensorFinisher
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
+# --------------------------------------------------
+# MQTT Alert Publishing (we will utilize this later)
+# --------------------------------------------------
 
-# Will utilize mqtt communication later
 def _publish_alert(sensor_name: str, alert_dict: dict) -> None:
 
-    if not mD.mqttOn:
-        return
     try:
-        # Handles the connection, TLS, credentials, and publishes to <macAddress> / <sensorName>
         mL.writeMQTTLatest(alert_dict, sensor_name)
+
     except Exception:
         print(f"[mintsFailureAnalysis] MQTT publish failed for {sensor_name}")
         traceback.print_exc()
 
 
-
+# -----------------------------------
 # Unpacking & Parsing valo node data
+# -----------------------------------
 
 
 
 
 
+# -----------
+# SAFE Logic
+# -----------
 
-# Sensor drift testing using T-test and F-test => combined for P-test value
+class SensorDrift:
+
+    def __init__(self, window_size=200, z_threshold=3.5, p_alpha=0.01):
+        self.window_size = window_size
+        self.z_threshold = z_threshold
+        self.p_alpha = p_alpha
+
+        # Dictionary of deques to store recent values
+        self.history = {}
+
+        # Hard limits for each sensor 
+        self.hard_bounds = {
+            'temperature': (-40.0, 100.0),  # Celsius
+            'humidity':    (0.0, 100.0),       
+            'pressure':    (300.0, 1100.0),   
+            'pm2_5':       (0.0, 1000.0),         
+            'pm10':        (0.0, 1000.0),
+            'shuntVoltage': (-320.0, 320.0) # mV     
+        }
+
+    # Update history with new sensor data, ensuring we maintain a fixed window size
+    def data_reading(self, sensor_name: str, sensor_dict: dict):
+
+        # Initialize history for this sensor if not present
+        if sensor_name not in self.history:     
+            self.history[sensor_name] = {}
+
+
+'''
+
 def sensor_drift_testing(baseline_data: list, recent_data:   list, p_threshold:   float = 0.05) -> Optional[dict]:
  
     if len(baseline_data) < 2 or len(recent_data) < 2:
@@ -98,3 +132,5 @@ def test_and_report_drift(sensor_name: str, baseline_data: list, recent_data: li
         _publish_alert(f"{sensor_name}_DriftAlert", drift_stats)
  
     return drift_stats
+
+'''
