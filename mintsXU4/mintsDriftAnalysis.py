@@ -73,15 +73,51 @@ class SensorDrift:
             'pressure':    (300.0, 1100.0),   
             'pm2_5':       (0.0, 1000.0),         
             'pm10':        (0.0, 1000.0),
-            'shuntVoltage': (-320.0, 320.0) # mV     
+            'shuntVoltage': (-320.0, 320.0) # INA219 MAX shunt voltage range     
         }
 
     # Update history with new sensor data, ensuring we maintain a fixed window size
-    def data_reading(self, sensor_name: str, sensor_dict: dict):
+    def data_processing(self, sensor_name: str, sensor_dict: dict):
 
         # Initialize history for this sensor if not present
         if sensor_name not in self.history:     
             self.history[sensor_name] = {}
+
+        # Process key-value pairs in the sensor dict --> skip non-numeric values and "dateTime"
+        for key, val in sensor_dict.items():
+
+            if key == "dateTime":
+                continue
+
+            try:
+                value = float(val)
+
+            except (ValueError, TypeError):
+                continue # Skip non-numeric values
+
+            # Checking if value violates hard bounds --> publish alert if TRUE
+            hard_bounds = self.hard_bounds.get(key)
+
+            if hard_bounds and (value < hard_bounds[0] or value > hard_bounds[1]):
+                _publish_alert(sensor_name, {
+                    "alert": "HardBoundViolation",
+                    "metric": key, 
+                    "value": value, 
+                    "bounds": hard_bounds
+                })
+
+                # Don't add this value to history
+                continue
+
+        # Check if we have a deque for this key to store recent vals
+        if key not in self.history[sensor_name]:
+            self.history[sensor_name][key] = deque(maxlen=self.window_size)
+        
+        # Add new value to the history buffer
+        buffer = self.history[sensor_name][key]
+        
+        # Z-score outlier detection
+
 
 
 '''
