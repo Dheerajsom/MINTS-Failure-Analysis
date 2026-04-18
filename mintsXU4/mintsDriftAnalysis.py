@@ -13,6 +13,7 @@
 # ***************************************************************************
 
 import datetime
+import time
 import numpy as np
 from scipy import stats
 from collections import OrderedDict, deque
@@ -73,7 +74,7 @@ class SensorDrift:
             'pressure':    (300.0, 1100.0),   
             'pm2_5':       (0.0, 1000.0),         
             'pm10':        (0.0, 1000.0),
-            'shuntVoltage': (-320.0, 320.0) # INA219 MAX shunt voltage range     
+            'shuntVoltage': (-0.320, 0.320) # INA219 MAX shunt voltage range (V)     
         }
 
     # Update history with new sensor data, ensuring we maintain a fixed window size
@@ -100,7 +101,7 @@ class SensorDrift:
 
             if hard_bounds and (value < hard_bounds[0] or value > hard_bounds[1]):
                 _publish_alert(sensor_name, {
-                    "alert": "HardBoundViolation",
+                    "alert": "hard-bounds-violation",
                     "metric": key, 
                     "value": value, 
                     "bounds": hard_bounds
@@ -116,7 +117,45 @@ class SensorDrift:
         # Add new value to the history buffer
         buffer = self.history[sensor_name][key]
         
-        # Z-score outlier detection
+        # Z-score outlier detection, only run with 30+ values to have a stable mean/std
+        if len(buffer) >= 30:
+            arr = np.array(buffer)
+
+            mean = np.mean(arr)
+            std = np.std(arr)
+
+            if std > 0:
+                z_score = abs((value - mean) / std)
+
+                # If z-score > threshold --> publish an alert with details
+                if z_score > self.z_threshold:
+                    _publish_alert(sensor_name, {
+                        "alert": "z-score-outlier",
+                        "metric": key,
+                        "value": value,
+                        "z_score": round(z_score, 3)
+                    })
+
+                # Add current value to history
+                buffer.append(value)
+
+                # Run combined P-test
+                if len(buffer) >= self.window_size:
+                    self._evaluate_drift(sensor_name, key, list(buffer))
+                
+    
+    def _evaluate_drift(self, sensor_name: str, metric: str, data: list):
+
+        # Split data in half and check for avg shift and variance inflation 
+        mid = len(data) // 2
+        old_half = data[:mid]
+        new_half = data[mid:]
+
+
+
+
+
+
 
 
 
