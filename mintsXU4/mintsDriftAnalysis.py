@@ -12,22 +12,15 @@
 
 # ***************************************************************************
 
-import datetime
 import time
 import numpy as np
 from scipy import stats
-from collections import OrderedDict, deque
-from dataclasses import dataclass, field
-from typing import Optional
+from collections import deque
 import warnings
 import traceback
-import json
-import ssl
-import time
 
 
 from mintsXU4 import mintsLatest as mL
-from mintsXU4.mintsSensorReader import sensorFinisher
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -63,6 +56,7 @@ class SensorDrift:
         self.window_size = window_size
         self.z_threshold = z_threshold
         self.p_alpha = p_alpha
+        self._last_alert_time = {}
 
         # Dictionary of deques to store recent values
         self.history = {}
@@ -110,38 +104,38 @@ class SensorDrift:
                 # Don't add this value to history
                 continue
 
-        # Check if we have a deque for this key to store recent vals
-        if key not in self.history[sensor_name]:
-            self.history[sensor_name][key] = deque(maxlen=self.window_size)
+            # Check if we have a deque for this key to store recent vals
+            if key not in self.history[sensor_name]:
+                self.history[sensor_name][key] = deque(maxlen=self.window_size)
         
-        # Add new value to the history buffer
-        buffer = self.history[sensor_name][key]
+            # Add new value to the history buffer
+            buffer = self.history[sensor_name][key]
         
-        # Z-score outlier detection, only run with 30+ values to have a stable mean/std
-        if len(buffer) >= 30:
-            arr = np.array(buffer)
+            # Z-score outlier detection, only run with 30+ values to have a stable mean/std
+            if len(buffer) >= 30:
+                arr = np.array(buffer)
 
-            mean = np.mean(arr)
-            std = np.std(arr)
+                mean = np.mean(arr)
+                std = np.std(arr)
 
-            if std > 0:
-                z_score = abs((value - mean) / std)
+                if std > 0:
+                    z_score = abs((value - mean) / std)
 
-                # If z-score > threshold --> publish an alert with details
-                if z_score > self.z_threshold:
-                    _publish_alert(sensor_name, {
-                        "alert": "z-score-outlier",
-                        "metric": key,
-                        "value": value,
-                        "z_score": round(z_score, 3)
-                    })
+                    # If z-score > threshold --> publish an alert with details
+                    if z_score > self.z_threshold:
+                        _publish_alert(sensor_name, {
+                            "alert": "z-score-outlier",
+                            "metric": key,
+                            "value": value,
+                            "z_score": round(z_score, 3)
+                        })
 
-                # Add current value to history
-                buffer.append(value)
+            # Add current value to history
+            buffer.append(value)
 
-                # Run combined P-test
-                if len(buffer) >= self.window_size:
-                    self._evaluate_drift(sensor_name, key, list(buffer))
+            # Run combined P-test
+            if len(buffer) >= self.window_size:
+                self._evaluate_drift(sensor_name, key, list(buffer))
                 
     
     def _evaluate_drift(self, sensor_name: str, metric: str, data: list):
@@ -162,17 +156,8 @@ class SensorDrift:
         _, p_levene = stats.levene(old_half, new_half, center="mean")
 
         # Handle NaNs
-        if np.isnan(p_welch):
-            p_welch = 1.0
-        else:
-            p_welch
-        
-
-        if np.isnan(p_levene):
-            p_levene = 1.0
-        
-        else:
-            p_levene
+        p_welch  = 1.0 if np.isnan(p_welch)  else max(p_welch,  1e-15)
+        p_levene = 1.0 if np.isnan(p_levene) else max(p_levene, 1e-15)
 
         # Fisher method --> combine both p-values into 1 drift metric
         _, combined_pvalue = stats.combine_pvalues([p_welch, p_levene], method="fisher")
@@ -200,3 +185,5 @@ class SensorDrift:
                 "p_welch": format(p_welch, ".2e"), "p_levene": format(p_levene, ".2e"),
                 "p_combined": format(combined_pvalue, ".2e"),
             })
+
+drift_engine = SensorDrift() 
