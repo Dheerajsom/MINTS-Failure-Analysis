@@ -65,9 +65,9 @@ class SensorDrift:
         self.hard_bounds = {
             'temperature': (-40.0, 100.0),  # Celsius
             'humidity':    (0.0, 100.0),       
-            'pressure':    (300.0, 1100.0),   
-            'pm2_5':       (0.0, 1000.0),         
-            'pm10':        (0.0, 1000.0),
+            'pressure':    (300.0, 1200.0),   
+            'pm2_5':       (0.0, 10000.0),         
+            'pm10':        (0.0, 10000.0),
             'shuntVoltage': (-0.320, 0.320) # INA219 MAX shunt voltage range (V)     
         }
 
