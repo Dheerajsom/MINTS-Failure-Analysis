@@ -56,6 +56,8 @@ class SensorDrift:
         self.window_size = window_size
         self.z_threshold = z_threshold
         self.p_alpha = p_alpha
+        
+        # Dictionary to store the last time an alert was sent
         self._last_alert_time = {}
 
         # Dictionary of deques to store recent values
@@ -70,6 +72,18 @@ class SensorDrift:
             'pm10':        (0.0, 1000.0),
             'shuntVoltage': (-0.320, 0.320) # INA219 MAX shunt voltage range (V)     
         }
+
+    # Helper function to prevent alert spam
+    def _alert_cooldown(self, sensor_name: str, metric: str, alert_type: str, cooldown_seconds=600) -> bool:
+
+        key = f"{sensor_name}_{metric}_{alert_type}"
+        current_time = time.time()
+        
+        if current_time - self._last_alert_time.get(key, 0) < cooldown_seconds:
+            return False
+            
+        self._last_alert_time[key] = current_time
+        return True
 
     # Update history with new sensor data, ensuring we maintain a fixed window size
     def data_processing(self, sensor_name: str, sensor_dict: dict):
@@ -94,12 +108,14 @@ class SensorDrift:
             hard_bounds = self.hard_bounds.get(key)
 
             if hard_bounds and (value < hard_bounds[0] or value > hard_bounds[1]):
-                _publish_alert(sensor_name, {
-                    "alert": "hard-bounds-violation",
-                    "metric": key, 
-                    "value": value, 
-                    "bounds": hard_bounds
-                })
+                if self._alert_cooldown(sensor_name, key, "hard-bounds"):
+
+                    _publish_alert(sensor_name, {
+                        "alert": "hard-bounds-violation",
+                        "metric": key, 
+                        "value": value, 
+                        "bounds": hard_bounds
+                    })
 
                 # Don't add this value to history
                 continue
@@ -123,17 +139,18 @@ class SensorDrift:
 
                     # If z-score > threshold --> publish an alert with details
                     if z_score > self.z_threshold:
-                        _publish_alert(sensor_name, {
-                            "alert": "z-score-outlier",
-                            "metric": key,
-                            "value": value,
-                            "z_score": round(z_score, 3)
-                        })
+                        if self._alert_cooldown(sensor_name, key, "z-score"):
+                            _publish_alert(sensor_name, {
+                                "alert": "z-score-outlier",
+                                "metric": key,
+                                "value": value,
+                                "z_score": round(z_score, 3)
+                            })
 
-            # Add current value to history
+            # Add current value to history buffer before running drift evaluation
             buffer.append(value)
 
-            # Run combined P-test
+            # Run drift evaluation once the buffer is full
             if len(buffer) >= self.window_size:
                 self._evaluate_drift(sensor_name, key, list(buffer))
                 
@@ -149,41 +166,49 @@ class SensorDrift:
         if np.var(old_half) == 0 and np.var(new_half) == 0:
             return 
         
-        # Welch T-Test
+        # Welch T-Test: Detects a shift in the mean (average value)
         _, p_welch = stats.ttest_ind(old_half, new_half, equal_var=False)
 
-        # Levene F-Test
+        # Levene F-Test: Detects a shift in variance (noise levels)
         _, p_levene = stats.levene(old_half, new_half, center="mean")
 
-        # Handle NaNs
+        # Handle NaNs and Floor small p-values for reporting
         p_welch  = 1.0 if np.isnan(p_welch)  else max(p_welch,  1e-15)
         p_levene = 1.0 if np.isnan(p_levene) else max(p_levene, 1e-15)
 
-        # Fisher method --> combine both p-values into 1 drift metric
-        _, combined_pvalue = stats.combine_pvalues([p_welch, p_levene], method="fisher")
 
-
+        ''' 
+        > Use independent checks instead of combined 
+        > If either test falls below alpha, there is most likely notable drift
         '''
-        > If combined p-value falls below the alpha then drift is detected
-        > Remember p_alpha is 0.01 --> strict threshold to minimize false positives
 
-        '''
-        
-        if combined_pvalue < self.p_alpha:
+        if p_welch < self.p_alpha:
+            mean_shift_detected = True
+
+        else:
+            mean_shift_detected = False
+
+
+        if p_levene < self.p_alpha:
+            variance_shift_detected = True
+
+        else:
+            variance_shift_detected = False
+
+        # Send alert if any shift was detected
+        if mean_shift_detected or variance_shift_detected:
             
-            # 10-minute cooldown to avoid repeated alerts to broker
-            cooldown = f"{sensor_name}_{metric}"
-            present_time = time.time()
-
-            if present_time - self._last_alert_time.get(cooldown, 0) < 600:
+            # Use the cooldown helper to avoid spamming requests
+            if not self._alert_cooldown(sensor_name, metric, "drift"):
                 return
-            
-            # Update last alert time
-            self._last_alert_time[cooldown] = present_time
  
-            _publish_alert(sensor_name, {"alert": "Sensor Drift Detected", "metric": metric,
-                "p_welch": format(p_welch, ".2e"), "p_levene": format(p_levene, ".2e"),
-                "p_combined": format(combined_pvalue, ".2e"),
+            _publish_alert(sensor_name, {
+                "alert": "Sensor Drift Detected", 
+                "metric": metric,
+                "mean_shift": mean_shift_detected,
+                "variance_shift": variance_shift_detected,
+                "p_welch": format(p_welch, ".2e"), 
+                "p_levene": format(p_levene, ".2e")
             })
 
 drift_engine = SensorDrift() 
