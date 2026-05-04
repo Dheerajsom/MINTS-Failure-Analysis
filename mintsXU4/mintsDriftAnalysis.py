@@ -101,6 +101,9 @@ class SensorDrift:
             try:
                 value = float(val)
 
+                if not np.isfinite(value):
+                    continue
+
             except (ValueError, TypeError):
                 continue # Skip non-numeric values
 
@@ -146,6 +149,8 @@ class SensorDrift:
                                 "value": value,
                                 "z_score": round(z_score, 3)
                             })
+                        
+                        continue
 
             # Add current value to history buffer before running drift evaluation
             buffer.append(value)
@@ -162,9 +167,28 @@ class SensorDrift:
         old_half = data[:mid]
         new_half = data[mid:]
 
-        # Check if vectors are flat (prevent NaN p-values in tests)
+        old_variance = np.var(old_half)
+        new_variance = np.var(new_half)
+
+        old_mean = np.mean(old_half)
+        new_mean = np.mean(new_half)
+
+        # Variance below this value is considered effectively flat, accounting for floating-point noise
+        FLAT_VAR_THRESHOLD = 1e-12
+
+        # Mean difference must exceed this value to count as real shift, not numerical noise
+        MEAN_SHIFT_THRESHOLD = 0.01 
+
+        old_flat = old_variance < FLAT_VAR_THRESHOLD
+        new_flat = new_variance < FLAT_VAR_THRESHOLD
+        mean_val_changed = abs(old_mean - new_mean) > MEAN_SHIFT_THRESHOLD
+
+
+        # SKIPPING all flat windows even when the flat value changed --> wrong logic below need to fix
+        '''
         if np.var(old_half) == 0 and np.var(new_half) == 0:
             return 
+        '''
         
         # Welch T-Test: Detects a shift in the mean (average value)
         _, p_welch = stats.ttest_ind(old_half, new_half, equal_var=False)
