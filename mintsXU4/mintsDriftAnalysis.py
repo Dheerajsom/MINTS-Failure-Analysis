@@ -18,9 +18,13 @@ from scipy import stats
 from collections import deque
 import warnings
 import traceback
+import pandas as pd
+import os
 
-
-from mintsXU4 import mintsLatest as mL
+'''
+Don't need this since we're doing local testing not MQTT
+'''
+# from mintsXU4 import mintsLatest as mL
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -31,10 +35,16 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 def _publish_alert(sensor_name: str, alert_dict: dict) -> None:
 
     try:
-        mL.writeMQTTLatest(alert_dict, sensor_name)
+        print(f"\n[ALERT] Sensor: {sensor_name}") # Local testing, we print the alerts directly to the console
+
+        for key, value in alert_dict.items():
+
+            print(f"  - {key}: {value}")
+
+        print("-" * 30)
 
     except Exception:
-        print(f"[mintsFailureAnalysis] MQTT publish failed for {sensor_name}")
+        print(f"Alert logging failed for {sensor_name}")
         traceback.print_exc()
 
 
@@ -42,9 +52,62 @@ def _publish_alert(sensor_name: str, alert_dict: dict) -> None:
 # Unpacking & Parsing valo node data
 # -----------------------------------
 
+# Used Gemini CLI for this part to try it out 
 
+def parse_and_process_valo_data(file_path):
+   
+    if not os.path.exists(file_path):
+        print(f"Data file not found: {file_path}")
+        return
 
+    print(f"Reading data from {file_path}...")
+    
+    try:
+        # InfluxDB exports have 3 metadata lines: #group, #datatype, #default
+        # Row 4 (index 3) contains the actual column names (_time, _value, etc.)
+        df = pd.read_excel(file_path, skiprows=3)
 
+        # In case the format varies, let's ensure we have the right columns
+        required_cols = ['_time', '_value', '_field', '_measurement', 'device_id']
+        missing = [col for col in required_cols if col not in df.columns]
+        
+        if missing:
+            print(f"Error: Missing expected columns: {missing}")
+            print(f"Detected columns were: {df.columns.tolist()}")
+            return
+
+        # Ensure numeric values are properly typed
+        df['_value'] = pd.to_numeric(df['_value'], errors='coerce')
+        
+        # Drop rows with NaN values in critical columns
+        df = df.dropna(subset=['_value', '_time'])
+        
+        # Pivot the data to get fields as columns if multiple fields exist for the same timestamp
+        # InfluxDB "long" format -> "wide" format
+        pivot_df = df.pivot_table(
+
+            index=['_time', '_measurement', 'device_id'], 
+            columns='_field', 
+            values='_value').reset_index()
+
+        print(f"Processing {len(pivot_df)} data points...")
+
+        for _, row in pivot_df.iterrows():
+
+            sensor_name = f"{row['_measurement']}_{row['device_id']}"
+            
+            # Construct dictionary for data_processing
+            # Exclude index columns to keep only sensor metrics
+            sensor_dict = row.drop(['_time', '_measurement', 'device_id']).to_dict()
+            sensor_dict['dateTime'] = row['_time']
+            
+            drift_engine.data_processing(sensor_name, sensor_dict)
+            
+        print("Data processing complete.")
+
+    except Exception as e:
+        print(f"Error parsing data: {e}")
+        traceback.print_exc()
 
 # -----------
 # SAFE Logic
@@ -236,3 +299,18 @@ class SensorDrift:
             })
 
 drift_engine = SensorDrift() 
+
+if __name__ == "__main__":
+
+    # Get the directory where the script is located
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Path to valo data relative to this script
+    data_file = os.path.join(script_dir, 'data', 'valo_node_01_full_year.xlsm')
+
+    print(f"Current Working Directory: {os.getcwd()}")
+    print(f"Resolved Data File Path: {data_file}")
+
+    # Run the parse function
+    parse_and_process_valo_data(data_file)
+ 
