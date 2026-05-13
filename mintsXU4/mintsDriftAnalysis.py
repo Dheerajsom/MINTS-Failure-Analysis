@@ -32,10 +32,10 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 # MQTT Alert Publishing (we will utilize this later)
 # --------------------------------------------------
 
-def _publish_alert(sensor_name: str, alert_dict: dict) -> None:
+def _publish_alert(sensor_name: str, alert_dict: dict, data_time: str = "N/A") -> None:
 
     try:
-        print(f"\n[ALERT] Sensor: {sensor_name}") # Local testing, we print the alerts directly to the console
+        print(f"\n[ALERT] Sensor: {sensor_name} | Data Time: {data_time}") # Local testing, we print the alerts directly to the console
 
         for key, value in alert_dict.items():
 
@@ -137,19 +137,31 @@ class SensorDrift:
         }
 
     # Helper function to prevent alert spam
-    def _alert_cooldown(self, sensor_name: str, metric: str, alert_type: str, cooldown_seconds=600) -> bool:
+    def _alert_cooldown(self, sensor_name: str, metric: str, alert_type: str, current_timestamp: float, cooldown_seconds=600) -> bool:
 
         key = f"{sensor_name}_{metric}_{alert_type}"
-        current_time = time.time()
+        last_time = self._last_alert_time.get(key)
         
-        if current_time - self._last_alert_time.get(key, 0) < cooldown_seconds:
-            return False
+        # If we have alerted before, check the delta
+        if last_time is not None:
+            delta = current_timestamp - last_time
+            if delta < cooldown_seconds:
+                return False
             
-        self._last_alert_time[key] = current_time
+        self._last_alert_time[key] = current_timestamp
         return True
 
     # Update history with new sensor data, ensuring we maintain a fixed window size
     def data_processing(self, sensor_name: str, sensor_dict: dict):
+
+        # Convert dateTime to Unix timestamp for consistent cooldown checks
+        dt = sensor_dict.get('dateTime')
+        
+        if dt is None:
+            return
+            
+        current_timestamp = pd.to_datetime(dt).timestamp()
+        data_time_str = str(dt)
 
         # Initialize history for this sensor if not present
         if sensor_name not in self.history:     
@@ -174,14 +186,14 @@ class SensorDrift:
             hard_bounds = self.hard_bounds.get(key)
 
             if hard_bounds and (value < hard_bounds[0] or value > hard_bounds[1]):
-                if self._alert_cooldown(sensor_name, key, "hard-bounds"):
+                if self._alert_cooldown(sensor_name, key, "hard-bounds", current_timestamp):
 
                     _publish_alert(sensor_name, {
                         "alert": "hard-bounds-violation",
                         "metric": key, 
                         "value": value, 
                         "bounds": hard_bounds
-                    })
+                    }, data_time_str)
 
                 # Don't add this value to history
                 continue
@@ -193,8 +205,8 @@ class SensorDrift:
             # Add new value to the history buffer
             buffer = self.history[sensor_name][key]
         
-            # Z-score outlier detection, only run with 30+ values to have a stable mean/std
-            if len(buffer) >= 30:
+            # Z-score outlier detection, only run with 30+ values and reading > 15
+            if len(buffer) >= 30 and value > 15:
                 arr = np.array(buffer)
 
                 mean = np.mean(arr)
@@ -205,13 +217,13 @@ class SensorDrift:
 
                     # If z-score > threshold --> publish an alert with details
                     if z_score > self.z_threshold:
-                        if self._alert_cooldown(sensor_name, key, "z-score"):
+                        if self._alert_cooldown(sensor_name, key, "z-score", current_timestamp):
                             _publish_alert(sensor_name, {
                                 "alert": "z-score-outlier",
                                 "metric": key,
                                 "value": value,
                                 "z_score": round(z_score, 3)
-                            })
+                            }, data_time_str)
                         
                         continue
 
@@ -220,10 +232,10 @@ class SensorDrift:
 
             # Run drift evaluation once the buffer is full
             if len(buffer) >= self.window_size:
-                self._evaluate_drift(sensor_name, key, list(buffer))
+                self._evaluate_drift(sensor_name, key, list(buffer), current_timestamp, data_time_str)
                 
     
-    def _evaluate_drift(self, sensor_name: str, metric: str, data: list):
+    def _evaluate_drift(self, sensor_name: str, metric: str, data: list, current_timestamp: float, data_time_str: str):
 
         # Split data in half and check for avg shift and variance inflation 
         mid = len(data) // 2
@@ -247,11 +259,19 @@ class SensorDrift:
         mean_val_changed = abs(old_mean - new_mean) > MEAN_SHIFT_THRESHOLD
 
 
-        # SKIPPING all flat windows even when the flat value changed --> wrong logic below need to fix
-        '''
-        if np.var(old_half) == 0 and np.var(new_half) == 0:
+        # Handle flat-line transitions (step-changes) early to avoid SciPy division errors
+        if old_flat and new_flat:
+            if mean_val_changed:
+                if self._alert_cooldown(sensor_name, metric, "drift", current_timestamp):
+
+                    _publish_alert(sensor_name, {
+                        "alert": "Sensor Drift Detected Step-Change",
+                        "metric": metric,
+                        "old_mean": round(old_mean, 3),
+                        "new_mean": round(new_mean, 3)
+                    }, data_time_str)
+                    
             return 
-        '''
         
         # Welch T-Test: Detects a shift in the mean (average value)
         _, p_welch = stats.ttest_ind(old_half, new_half, equal_var=False)
@@ -286,7 +306,7 @@ class SensorDrift:
         if mean_shift_detected or variance_shift_detected:
             
             # Use the cooldown helper to avoid spamming requests
-            if not self._alert_cooldown(sensor_name, metric, "drift"):
+            if not self._alert_cooldown(sensor_name, metric, "drift", current_timestamp):
                 return
  
             _publish_alert(sensor_name, {
@@ -296,7 +316,8 @@ class SensorDrift:
                 "variance_shift": variance_shift_detected,
                 "p_welch": format(p_welch, ".2e"), 
                 "p_levene": format(p_levene, ".2e")
-            })
+            }, data_time_str)
+
 
 drift_engine = SensorDrift() 
 
