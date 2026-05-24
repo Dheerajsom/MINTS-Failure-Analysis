@@ -52,11 +52,12 @@ def _publish_alert(sensor_name: str, alert_dict: dict, data_time: str = "N/A") -
 # Unpacking & Parsing valo node data
 # -----------------------------------
 
-# Used Gemini CLI for this part to try it out 
+# Used AI for parse_and_process function
 
 def parse_and_process_valo_data(file_path):
    
     if not os.path.exists(file_path):
+
         print(f"Data file not found: {file_path}")
         return
 
@@ -83,29 +84,49 @@ def parse_and_process_valo_data(file_path):
         df = df.dropna(subset=['_value', '_time'])
         
         # Pivot the data to get fields as columns if multiple fields exist for the same timestamp
-        # InfluxDB "long" format -> "wide" format
-        pivot_df = df.pivot_table(
+        pivot_df = df.pivot_table(index=['_time', '_measurement', 'device_id'], columns='_field', values='_value').reset_index()
 
-            index=['_time', '_measurement', 'device_id'], 
-            columns='_field', 
-            values='_value').reset_index()
+        print("Pre-converting timestamps...")
 
-        print(f"Processing {len(pivot_df)} data points...")
+        # Pre-convert timestamps to avoid doing it per-row in the loop
+        parsed_times = pd.to_datetime(pivot_df['_time'], format='ISO8601')
 
-        for _, row in pivot_df.iterrows():
+        # Vectorized Unix timestamp conversion (avoids slow per-row .apply(lambda))
+        pivot_df['_unix_time'] = parsed_times.dt.tz_convert(None).astype('datetime64[s]').astype('int64')
+        pivot_df['_str_time'] = parsed_times.dt.strftime('%Y-%m-%d %H:%M:%S')
 
-            sensor_name = f"{row['_measurement']}_{row['device_id']}"
-            
-            # Construct dictionary for data_processing
-            # Exclude index columns to keep only sensor metrics
-            sensor_dict = row.drop(['_time', '_measurement', 'device_id']).to_dict()
-            sensor_dict['dateTime'] = row['_time']
-            
-            drift_engine.data_processing(sensor_name, sensor_dict)
+        # Pre-calculate sensor names vectorially
+        pivot_df['_sensor_name'] = pivot_df['_measurement'] + '_' + pivot_df['device_id'].astype(str)
+
+        # Identify metric columns (everything that isn't metadata)
+        meta_cols = ['_time', '_measurement', 'device_id', '_unix_time', '_str_time', '_sensor_name']
+        metric_cols = [col for col in pivot_df.columns if col not in meta_cols]
+
+        # Convert to list of dicts --> wayy faster than iterrows
+        records = pivot_df[['_sensor_name', '_unix_time', '_str_time'] + metric_cols].to_dict(orient='records')
+
+        print(f"Processing {len(records)} data points...")
+
+        for record in records:
+
+            sensor_name = record.pop('_sensor_name')
+            record['unix_timestamp'] = record.pop('_unix_time')
+            record['str_timestamp'] = record.pop('_str_time')
+
+            try:
+
+                drift_engine.data_processing(sensor_name, record)
+
+            except Exception as row_err:
+
+                print(f"Error processing row: {row_err}")
+                traceback.print_exc()
+
             
         print("Data processing complete.")
 
     except Exception as e:
+
         print(f"Error parsing data: {e}")
         traceback.print_exc()
 
@@ -126,6 +147,13 @@ class SensorDrift:
         # Dictionary of deques to store recent values
         self.history = {}
 
+        # Dictionary to track samples since last evaluation for non-overlapping windows
+        self.eval_counters = {}
+
+        # Dictionary to track consecutive outlier values per metric (for step-change detection)
+        # Stores the actual values (not just a count) so we can seed the buffer on step-change
+        self._consecutive_outliers = {}
+
         # Hard limits for each sensor 
         self.hard_bounds = {
             'temperature': (-40.0, 100.0),  # Celsius
@@ -137,7 +165,7 @@ class SensorDrift:
         }
 
     # Helper function to prevent alert spam
-    def _alert_cooldown(self, sensor_name: str, metric: str, alert_type: str, current_timestamp: float, cooldown_seconds=600) -> bool:
+    def _alert_cooldown(self, sensor_name: str, metric: str, alert_type: str, current_timestamp: float, cooldown_seconds=1800) -> bool:
 
         key = f"{sensor_name}_{metric}_{alert_type}"
         last_time = self._last_alert_time.get(key)
@@ -145,6 +173,7 @@ class SensorDrift:
         # If we have alerted before, check the delta
         if last_time is not None:
             delta = current_timestamp - last_time
+            
             if delta < cooldown_seconds:
                 return False
             
@@ -154,23 +183,30 @@ class SensorDrift:
     # Update history with new sensor data, ensuring we maintain a fixed window size
     def data_processing(self, sensor_name: str, sensor_dict: dict):
 
-        # Convert dateTime to Unix timestamp for consistent cooldown checks
-        dt = sensor_dict.get('dateTime')
+        # Extract pre-converted timestamps (use .get() to avoid mutating the caller's dict)
+        current_timestamp = sensor_dict.get('unix_timestamp')
+        data_time_str = sensor_dict.get('str_timestamp')
         
-        if dt is None:
-            return
+        # Fallback if not using the optimized parser
+        if current_timestamp is None:
+            dt = sensor_dict.get('dateTime')
+
+            if dt is None:
+                return
             
-        current_timestamp = pd.to_datetime(dt).timestamp()
-        data_time_str = str(dt)
+            current_timestamp = pd.to_datetime(dt).timestamp()
+            data_time_str = str(dt)
 
         # Initialize history for this sensor if not present
         if sensor_name not in self.history:     
             self.history[sensor_name] = {}
+            self.eval_counters[sensor_name] = {}
+            self._consecutive_outliers[sensor_name] = {}
 
         # Process key-value pairs in the sensor dict --> skip non-numeric values and "dateTime"
         for key, val in sensor_dict.items():
 
-            if key == "dateTime":
+            if key in ("dateTime", "unix_timestamp", "str_timestamp"):
                 continue
 
             try:
@@ -186,6 +222,7 @@ class SensorDrift:
             hard_bounds = self.hard_bounds.get(key)
 
             if hard_bounds and (value < hard_bounds[0] or value > hard_bounds[1]):
+                
                 if self._alert_cooldown(sensor_name, key, "hard-bounds", current_timestamp):
 
                     _publish_alert(sensor_name, {
@@ -201,22 +238,50 @@ class SensorDrift:
             # Check if we have a deque for this key to store recent vals
             if key not in self.history[sensor_name]:
                 self.history[sensor_name][key] = deque(maxlen=self.window_size)
+                self.eval_counters[sensor_name][key] = 0
+                self._consecutive_outliers[sensor_name][key] = deque(maxlen=10)
         
             # Add new value to the history buffer
             buffer = self.history[sensor_name][key]
         
-            # Z-score outlier detection, only run with 30+ values and reading > 15
-            if len(buffer) >= 30 and value > 15:
+            # Z-score outlier detection, only run with 30+ values
+            if len(buffer) >= 30:
                 arr = np.array(buffer)
 
                 mean = np.mean(arr)
                 std = np.std(arr)
 
-                if std > 0:
-                    z_score = abs((value - mean) / std)
+                # Clamp std to a noise floor so Z-score is always evaluated even on flat baselines when std ≈ 0
+                effective_std = max(std, 1e-3)
+                z_score = abs((value - mean) / effective_std)
 
-                    # If z-score > threshold --> publish an alert with details
-                    if z_score > self.z_threshold:
+                # If z-score > threshold --> flag as outlier
+                if z_score > self.z_threshold:
+                    outlier_deque = self._consecutive_outliers[sensor_name][key]
+                    outlier_deque.append(value)
+
+                    # If too many consecutive outliers, this is a step-change / regime shift,
+                    # not random noise. Reset the buffer and seed it with the saved outlier values.
+                    if len(outlier_deque) >= 10:
+                        saved_values = list(outlier_deque)
+
+                        if self._alert_cooldown(sensor_name, key, "step-change", current_timestamp):
+                            _publish_alert(sensor_name, {
+                                "alert": "Step-Change Detected",
+                                "metric": key,
+                                "value": value,
+                                "consecutive_outliers": len(saved_values),
+                                "old_mean": round(mean, 3)
+                            }, data_time_str)
+
+                        # Flush buffer and seed it with the saved outlier values
+                        # so the new baseline starts tracking immediately
+                        buffer.clear()
+                        buffer.extend(saved_values)
+                        self.eval_counters[sensor_name][key] = len(saved_values)
+                        self._consecutive_outliers[sensor_name][key].clear()
+                    else:
+                        # Regular single outlier alert (with cooldown)
                         if self._alert_cooldown(sensor_name, key, "z-score", current_timestamp):
                             _publish_alert(sensor_name, {
                                 "alert": "z-score-outlier",
@@ -224,15 +289,26 @@ class SensorDrift:
                                 "value": value,
                                 "z_score": round(z_score, 3)
                             }, data_time_str)
-                        
-                        continue
 
-            # Add current value to history buffer before running drift evaluation
+                    # Don't append outliers to the buffer and don't increment the eval counter
+                    continue
+
+            # Value passed all checks — reset consecutive outlier deque and append to buffer
+            self._consecutive_outliers[sensor_name][key].clear()
             buffer.append(value)
 
-            # Run drift evaluation once the buffer is full
-            if len(buffer) >= self.window_size:
-                self._evaluate_drift(sensor_name, key, list(buffer), current_timestamp, data_time_str)
+            # Increment eval counter only for values that actually entered the buffer (Bug 1 fix)
+            self.eval_counters[sensor_name][key] += 1
+
+            # Run drift evaluation once we have processed window_size new samples
+            if self.eval_counters[sensor_name][key] >= self.window_size:
+                # Buffer should be full since counter is now synced with appends
+                if len(buffer) == self.window_size:
+                    self._evaluate_drift(sensor_name, key, list(buffer), current_timestamp, data_time_str)
+                
+                # Reset counter to half the window for overlapping evaluation windows
+                # This ensures we compare samples 101-200 against 201-300, eliminating blind spots
+                self.eval_counters[sensor_name][key] = self.window_size // 2
                 
     
     def _evaluate_drift(self, sensor_name: str, metric: str, data: list, current_timestamp: float, data_time_str: str):
@@ -270,8 +346,24 @@ class SensorDrift:
                         "old_mean": round(old_mean, 3),
                         "new_mean": round(new_mean, 3)
                     }, data_time_str)
-                    
-            return 
+
+            return
+
+        # Handle half-flat windows: one half is constant while the other has variance.
+        # Publish a variance regime change alert, but do NOT return early —
+        # SciPy's ttest_ind and levene can handle one-side-zero-variance safely,
+        # and we still need to check for mean shifts (e.g., flatline at 10 → noisy around 100).
+        if old_flat != new_flat:
+            if self._alert_cooldown(sensor_name, metric, "variance-regime", current_timestamp):
+                _publish_alert(sensor_name, {
+                    "alert": "Variance Regime Change",
+                    "metric": metric,
+                    "detail": "One half is flat while the other has variance",
+                    "old_mean": round(old_mean, 3),
+                    "new_mean": round(new_mean, 3),
+                    "old_variance": round(float(old_variance), 6),
+                    "new_variance": round(float(new_variance), 6)
+                }, data_time_str)
         
         # Welch T-Test: Detects a shift in the mean (average value)
         _, p_welch = stats.ttest_ind(old_half, new_half, equal_var=False)
@@ -334,4 +426,3 @@ if __name__ == "__main__":
 
     # Run the parse function
     parse_and_process_valo_data(data_file)
- 
