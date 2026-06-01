@@ -1,0 +1,14 @@
+# Core analysis stack
+numpy
+scipy
+pandas
+matplotlib
+openpyxl
+
+# Serial / sensor I/O and networking
+pyserial
+paho-mqtt
+getmac
+pynmea2
+netifaces
+pyyaml

@@ -16,9 +16,11 @@ import numpy as np
 from scipy import stats
 from collections import deque
 import warnings
-import traceback
+import logging
 import pandas as pd
 import os
+
+logger = logging.getLogger(__name__)
 
 '''
 Don't need this since we're doing local testing not MQTT
@@ -35,11 +37,13 @@ SENSOR_DISPLAY_NAMES = {
 # Hard bounds per metric
 # SensorDrift class and mintsPeriodAnalysis.py share this
 HARD_BOUNDS = {
+
     'temperature': (-40.0, 100.0),    # Celsius
     'humidity':    (0.0, 100.0),
     'pressure':    (300.0, 1200.0),
     'pm1_0':       (0.0, 10000.0),    # µg/m³
     'shuntVoltage': (-0.320, 0.320)   # INA219 MAX shunt voltage range (V)
+
 }
 
 # --------------------------------------------------
@@ -49,17 +53,14 @@ HARD_BOUNDS = {
 def _publish_alert(sensor_name: str, alert_dict: dict, data_time: str = "N/A") -> None:
 
     try:
-        print(f"\n[ALERT] Sensor: {sensor_name} | Data Time: {data_time}") # Local testing, we print the alerts directly to the console
-
+        lines = [f"\n[ALERT] Sensor: {sensor_name} | Data Time: {data_time}"]
         for key, value in alert_dict.items():
-
-            print(f"  - {key}: {value}")
-
-        print("-" * 30)
+            lines.append(f"  - {key}: {value}")
+        lines.append("-" * 30)
+        logger.warning("\n".join(lines))
 
     except Exception:
-        print(f"Alert logging failed for {sensor_name}")
-        traceback.print_exc()
+        logger.exception(f"Alert logging failed for {sensor_name}")
 
 
 # -----------------------------------
@@ -69,21 +70,20 @@ def _publish_alert(sensor_name: str, alert_dict: dict, data_time: str = "N/A") -
 def load_pivoted_dataframe(file_path):
 
     if not os.path.exists(file_path):
-        print(f"Data file not found: {file_path}")
+        logger.error(f"Data file not found: {file_path}")
         return None, None
 
-    print(f"Reading data from {file_path}...")
+    logger.info(f"Reading data from {file_path}...")
 
     required_cols = ['_time', '_value', '_field', '_measurement', 'device_id']
 
-    # comment='#' skips InfluxDB annotated-CSV header rows (#group/#datatype/#default);
     header = pd.read_csv(file_path, comment='#', nrows=0)
     missing = [col for col in required_cols if col not in header.columns]
 
+    # Checks if any headers are missing from the .csv
     if missing:
 
-        print(f"Error: Missing expected columns: {missing}")
-        print(f"Detected columns were: {header.columns.tolist()}")
+        logger.error(f"Missing expected columns: {missing}. Detected: {header.columns.tolist()}")
         return None, None
 
     df = pd.read_csv(file_path, comment='#', usecols=required_cols)
@@ -92,14 +92,29 @@ def load_pivoted_dataframe(file_path):
     df['_value'] = pd.to_numeric(df['_value'], errors='coerce')
     df = df.dropna(subset=['_value', '_time'])
 
-    # Pivot so each _field becomes its own column
-    pivot_df = df.pivot_table(index=['_time', '_measurement', 'device_id'], columns='_field', values='_value').reset_index()
+    # Warn on and drop duplicate index rows before pivoting (pivot_table would silently average them)
+    duplicates = df.duplicated(subset=['_time', '_measurement', 'device_id', '_field']).sum()
 
-    print("Pre-converting timestamps...")
+    if duplicates:
+        logger.warning(f"{duplicates} duplicate (_time, _measurement, device_id, _field) rows found — keeping first occurrence.")
+        df = df.drop_duplicates(subset=['_time', '_measurement', 'device_id', '_field'])
+
+    # Pivot so each _field becomes its own column
+    pivot_df = df.pivot_table(index=['_time', '_measurement', 'device_id'], columns='_field', values='_value', aggfunc='first').reset_index()
+
+    logger.info("Pre-converting timestamps...")
 
     # Vectorized timestamp conversion (avoids slow per-row .apply)
     parsed_times = pd.to_datetime(pivot_df['_time'], format='ISO8601')
-    naive_times = parsed_times.dt.tz_convert(None)
+
+    # Normalize to tz-naive UTC. tz_convert raises on tz-naive input, so localize
+    # those first; convert tz-aware (any offset) to UTC before dropping the tz.
+    if parsed_times.dt.tz is None:
+        naive_times = parsed_times
+
+    else:
+        naive_times = parsed_times.dt.tz_convert('UTC').dt.tz_localize(None)
+
     pivot_df['_unix_time'] = naive_times.astype('datetime64[s]').astype('int64')
     pivot_df['_str_time'] = parsed_times.dt.strftime('%Y-%m-%d %H:%M:%S')
 
@@ -118,7 +133,10 @@ def load_pivoted_dataframe(file_path):
 
     return pivot_df, metric_cols
 
-def parse_and_process_valo_data(file_path):
+def parse_and_process_valo_data(file_path, engine=None):    
+
+    if engine is None:
+        engine = SensorDrift()
 
     try:
         pivot_df, metric_cols = load_pivoted_dataframe(file_path)
@@ -129,7 +147,7 @@ def parse_and_process_valo_data(file_path):
         # Convert to list of dicts --> wayy faster than iterrows
         records = pivot_df[['_sensor_name', '_unix_time', '_str_time'] + metric_cols].to_dict(orient='records')
 
-        print(f"Processing {len(records)} data points...")
+        logger.info(f"Processing {len(records)} data points...")
 
         # Limit per-row error reporting --> show the first few in detail, then increment counter
         MAX_ROW_ERROR_TRACES = 3
@@ -143,27 +161,25 @@ def parse_and_process_valo_data(file_path):
 
             try:
 
-                drift_engine.data_processing(sensor_name, record)
+                engine.data_processing(sensor_name, record)
 
             except Exception as row_err:
 
                 error_count += 1
 
                 if error_count <= MAX_ROW_ERROR_TRACES:
-                    print(f"Error processing row: {row_err}")
-                    traceback.print_exc()
+                    logger.exception(f"Error processing row: {row_err}")
                 elif error_count == MAX_ROW_ERROR_TRACES + 1:
-                    print("Further row errors will be counted silently and summarized at the end...")
+                    logger.warning("Further row errors will be counted silently and summarized at the end...")
 
-        print("Data processing complete.")
+        logger.info("Data processing complete.")
 
         if error_count:
-            print(f"WARNING: skipped {error_count} row(s) due to processing errors.")
+            logger.warning(f"Skipped {error_count} row(s) due to processing errors.")
 
     except Exception as e:
 
-        print(f"Error parsing data: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error parsing data: {e}")
 
 # -----------
 # SAFE Logic
@@ -494,18 +510,18 @@ class SensorDrift:
             }, data_time_str)
 
 
-drift_engine = SensorDrift()
-
 if __name__ == "__main__":
+
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
     # Get the directory where the script is located
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
     # Path to valo data relative to this script
-    data_file = os.path.join(script_dir, 'output', 'period_year_to_year.csv')
+    data_file = os.path.join(script_dir, 'data', 'valo_node_01_full_year.csv')
 
-    print(f"Current Working Directory: {os.getcwd()}")
-    print(f"Resolved Data File Path: {data_file}")
+    logger.info(f"Current Working Directory: {os.getcwd()}")
+    logger.info(f"Resolved Data File Path: {data_file}")
 
     # Run the parse function
     parse_and_process_valo_data(data_file)

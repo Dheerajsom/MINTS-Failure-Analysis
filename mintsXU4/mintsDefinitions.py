@@ -67,8 +67,19 @@ def findMacAddress():
 
     return "xxxxxxxx"
 
-fPortIDs                  = yaml.load(open('mintsXU4/credentials/portIDs.yml'),Loader=yaml.FullLoader)['portIDs']
-mintsDefinitions         = yaml.load(open('mintsXU4/credentials/mintsDefinitions.yaml'),Loader=yaml.FullLoader)
+# Load a YAML config if present; return None instead of crashing at import
+def _loadYaml(path):
+
+    try:
+        with open(path) as f:
+            return yaml.load(f, Loader=yaml.FullLoader)
+    except FileNotFoundError:
+        print("[WARN] Config file not found, skipping: {0}".format(path))
+        return None
+
+_portIDsConfig            = _loadYaml('mintsXU4/credentials/portIDs.yml')
+fPortIDs                  = _portIDsConfig['portIDs'] if _portIDsConfig else None
+mintsDefinitions         = _loadYaml('mintsXU4/credentials/mintsDefinitions.yaml')
 
 dataFolderReference       = "/home/teamlary/mintsData/reference"
 dataFolderMQTTReference   = "/home/teamlary/mintsData/referenceMQTT"

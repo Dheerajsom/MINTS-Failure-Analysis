@@ -16,6 +16,8 @@
 import serial
 import datetime
 import os
+from os import listdir, walk
+from fnmatch import fnmatch
 import csv
 #import deepdish as dd
 from mintsXU4 import mintsLatest as mL
@@ -246,10 +248,16 @@ def GPGGAWriteAM(sensorData,dateTime):
     dataOut    = sensorData.replace('*',',').split(',')
     sensorName = "GPGGA"
     dataLength = 15
-    gpsQuality = int(dataOut[6])
     #print(dataOut)
     #print(sensorName+"-"+str(dataLength)+"-"+str(len(dataOut)))
-    if((len(dataOut) == (dataLength +1)) and (gpsQuality>0)):
+    # Validate packet length before indexing so a short/partial line can't crash the reader
+    if(len(dataOut) != (dataLength + 1)):
+        return
+    try:
+        gpsQuality = int(dataOut[6])
+    except ValueError:
+        return
+    if(gpsQuality>0):
         sensorDictionary = OrderedDict([
                 ("dateTime"              ,str(dateTime)),
         	    ("UTCTimeStamp"          ,dataOut[1]),
@@ -915,8 +923,15 @@ def GPSGPGGAWrite(dataString,dateTime):
 
 def GPSGPGGA2Write(dataString,dateTime):
     dataStringPost = dataString.replace('\n', '')
-    sensorData = pynmea2.parse(dataStringPost)
-    latitudeCordinate = getLatitudeCords(sensorData.lat,sensorData.lat_dir)
+    # A bad/partial serial line should be skipped, not crash the reader
+    try:
+        sensorData = pynmea2.parse(dataStringPost)
+    except pynmea2.ParseError:
+        return
+
+    # Need a valid fix and populated coordinate fields before any float() conversion
+    if(not sensorData.lat or not sensorData.lon):
+        return
 
     if(sensorData.gps_qual>0):
         sensorName = "GPSGPGGA2"

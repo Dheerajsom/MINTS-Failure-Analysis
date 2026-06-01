@@ -1,15 +1,5 @@
 # ***************************************************************************
 #  Period-over-Period Drift Analysis for MINTS valo node data
-#  ----------------------------------------------------------
-#  Batch companion to mintsDriftAnalysis.py. Instead of sliding 200-sample
-#  windows, it compares whole CALENDAR PERIODS for every metric:
-#    - Day-to-Day, Week-to-Week, Month-to-Month, Year-to-Year (consecutive pairs)
-#    - First month of data vs last month of data
-#  Each comparison reports per-period stats (mean/std/min/max/count) plus the same
-#  Welch t-test (mean shift) + Levene test (variance shift) the streaming detector
-#  uses. Results are written as one CSV per granularity.
-#
-#  Run:  python mintsPeriodAnalysis.py
 # ***************************************************************************
 
 import os
@@ -18,7 +8,12 @@ import pandas as pd
 
 # Reuse the loader, the drift-comparison math, and the physical limits from the
 # streaming module so both stay in lockstep (single source of truth).
-from mintsDriftAnalysis import load_pivoted_dataframe, sample_comparison, HARD_BOUNDS
+try:
+    # Works when run as a script from inside mintsXU4/
+    from mintsDriftAnalysis import load_pivoted_dataframe, sample_comparison, HARD_BOUNDS
+except ImportError:
+    # Works when run as a package/module (python -m mintsXU4.mintsPeriodAnalysis)
+    from mintsXU4.mintsDriftAnalysis import load_pivoted_dataframe, sample_comparison, HARD_BOUNDS
 
 # Rolling consecutive-period comparisons: (output stem, pandas offset alias, period label format)
 #   D  = calendar day,  W = week (ending Sunday),  MS = month start,  YS = year start
@@ -47,7 +42,7 @@ def _apply_hard_bounds(df, metric_cols):
 
             lo, hi = bounds
             df.loc[(df[metric] < lo) | (df[metric] > hi), metric] = np.nan
-            
+
     return df
 
 
@@ -157,6 +152,15 @@ def run_period_analysis(file_path, output_dir, p_alpha=0.01, min_samples=2):
     print(f"Wrote {os.path.basename(out_path)} ({len(rows)} rows)")
 
     print("Period analysis complete.")
+
+    # Automatically generate period plots
+    try:
+        from mintsPeriodPlotter import run_all_plotting
+        plots_dir = os.path.join(output_dir, "plots")
+        print("\nAuto-generating period plots...")
+        run_all_plotting(output_dir, plots_dir)
+    except Exception as plot_err:
+        print(f"Failed to auto-generate plots: {plot_err}")
 
 
 if __name__ == "__main__":

@@ -18,13 +18,19 @@ mqttPort            = mD.mqttPort
 mqttBroker          = mD.mqttBroker
 mqttCredentialsFile = mD.mqttCredentialsFile
 
-# FOR MQTT 
-credentials = yaml.load(open(mqttCredentialsFile))
+# For MQTT
+try:
+    with open(mqttCredentialsFile) as _credFile:
+        credentials = yaml.load(_credFile, Loader=yaml.FullLoader)
+except FileNotFoundError:
+    print("[WARN] MQTT credentials file not found, skipping: {0}".format(mqttCredentialsFile))
+    credentials = None
+
 connected   = False  # Stores the connection status
 broker      = mqttBroker
 port        = mqttPort # Secure port
-mqttUN      = credentials['mqtt']['username']  
-mqttPW      = credentials['mqtt']['password'] 
+mqttUN      = credentials['mqtt']['username'] if credentials else None
+mqttPW      = credentials['mqtt']['password'] if credentials else None
 tlsCert     = "/etc/ssl/certs/ca-certificates.crt"  # Put here the path of your TLS cert
 mqtt_client = mqttClient.Client()
 
@@ -78,13 +84,16 @@ def connect(mqtt_client, mqtt_username, mqtt_password, broker_endpoint, port):
 
 def writeMQTTLatest(sensorDictionary,sensorName):
 
-    if connect(mqtt_client, mqttUN, mqttPW, broker, port):
-        try:
-            mqtt_client.publish(macAddress+"/"+sensorName,json.dumps(sensorDictionary))
+    if not connect(mqtt_client, mqttUN, mqttPW, broker, port):
+        print("[ERROR] Could not publish data: not connected to broker")
+        return False
 
-        except Exception as e:
-            print("[ERROR] Could not publish data, error: {}".format(e))
-    
+    try:
+        mqtt_client.publish(macAddress+"/"+sensorName,json.dumps(sensorDictionary))
+    except Exception as e:
+        print("[ERROR] Could not publish data, error: {}".format(e))
+        return False
+
     return True
     
 
@@ -93,21 +102,27 @@ def writeJSONLatest(sensorDictionary,sensorName):
     directoryIn  = dataFolder+"/"+macAddress+"/"+sensorName+".json"
     print(directoryIn)
     try:
+        os.makedirs(os.path.dirname(directoryIn), exist_ok=True)
         with open(directoryIn,'w') as fp:
             json.dump(sensorDictionary, fp)
+        return True
 
-    except:
-        print("Json Data Not Written")
+    except Exception as e:
+        print("Json Data Not Written: {}".format(e))
+        return False
 
 def writeJSONLatestReference(sensorDictionary,sensorName):
     directoryIn  = dataFolderReference+"/"+macAddress+"/"+sensorName+".json"
     print(directoryIn)
     try:
+        os.makedirs(os.path.dirname(directoryIn), exist_ok=True)
         with open(directoryIn,'w') as fp:
             json.dump(sensorDictionary, fp)
+        return True
 
-    except:
-        print("Json Data Not Written")
+    except Exception as e:
+        print("Json Data Not Written: {}".format(e))
+        return False
 
 
 def readJSONLatestAll(sensorName):
