@@ -147,6 +147,7 @@ def parse_and_process_valo_data(file_path, engine=None):
         # Convert to list of dicts --> wayy faster than iterrows
         records = pivot_df[['_sensor_name', '_unix_time', '_str_time'] + metric_cols].to_dict(orient='records')
 
+        # Progress log that tells you how many rows the pipeline is about to feed into SAFE Engine
         logger.info(f"Processing {len(records)} data points...")
 
         # Limit per-row error reporting --> show the first few in detail, then increment counter
@@ -185,7 +186,7 @@ def parse_and_process_valo_data(file_path, engine=None):
 # SAFE Logic
 # -----------
 
-# Compare two samples and return descriptive stats + drift-test results.
+# Compare two samples and return descriptive stats + drift-test results
 def sample_comparison(old, new, p_alpha=0.01):
     
     old = np.asarray(old, dtype=float)
@@ -197,7 +198,7 @@ def sample_comparison(old, new, p_alpha=0.01):
     old_mean = float(np.mean(old))
     new_mean = float(np.mean(new))
 
-    # Variance below this is effectively flat --> the mean must move 
+    # Variance below this is basically flat --> the mean must move 
     # more than this to count as a real shift rather than noise
     FLAT_VAR_THRESHOLD = 1e-12
     MEAN_SHIFT_THRESHOLD = 0.01
@@ -212,7 +213,7 @@ def sample_comparison(old, new, p_alpha=0.01):
 
     if both_flat:
 
-        # Two constant arrays --> SciPy tests are meaningless. Drift = did the mean move
+        # Two constant arrays --> Drift = did the mean move
         p_welch = 1.0
         p_levene = 1.0
         mean_shift = mean_val_changed
@@ -454,8 +455,9 @@ class SensorDrift:
 
     def _evaluate_drift(self, sensor_name: str, metric: str, data: list, current_timestamp: float, data_time_str: str):
 
-        # Compare the older half of the window against the newer half (shared helper)
+        # Compare the older half of the window against the newer half
         mid = len(data) // 2
+        
         result = sample_comparison(data[:mid], data[mid:], self.p_alpha)
 
         old_mean = result['old_mean']
