@@ -1,0 +1,5 @@
+field,comparison,sample,test,statistic,p_value,n,mean,std
+PM1.0,Last 2 Weeks,Week 1 (2026-05-14 to 2026-05-21),One-sample KS vs standard normal after z-scoring,0.202988,0.0,2304,3.044297,2.991726
+PM1.0,Last 2 Weeks,Week 1 (2026-05-14 to 2026-05-21),D'Agostino-Pearson normality test,748.960278,0.0,2304,3.044297,2.991726
+PM1.0,Last 2 Weeks,Week 2 (2026-05-21 to 2026-05-28),One-sample KS vs standard normal after z-scoring,0.150215,0.0,2017,1.717952,1.215288
+PM1.0,Last 2 Weeks,Week 2 (2026-05-21 to 2026-05-28),D'Agostino-Pearson normality test,1096.558227,0.0,2017,1.717952,1.215288

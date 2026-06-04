@@ -52,6 +52,8 @@ METRIC_INFO = {
     "pressure":    {"name": "Pressure",    "unit": "hPa",   "color": "#1f77b4"},  # blue
 }
 LEVENE_COLOR = "#9467bd"   # purple
+RANGE_FILL_COLOR = "#6b7280"
+RANGE_EDGE_COLOR = "#4b5563"
 ALPHA = 0.01
 LOG_ALPHA = -np.log10(ALPHA)   # 2.0
 P_FLOOR_LOG = -np.log10(1e-15)  # 15.0 ceiling for floored p-values
@@ -88,6 +90,23 @@ def _as_bool(series):
         return series.to_numpy()
     mapped = series.map({"True": True, "False": False, True: True, False: False})
     return mapped.fillna(False).astype(bool).to_numpy()
+
+
+def _real_data_blocks(d, max_gap_days=45, min_std=0.05):
+    """Find date blocks where at least one side of the comparison is non-flat."""
+    real = d[(d["old_std"].abs() > min_std) | (d["new_std"].abs() > min_std)].sort_values("parsed_date")
+    if real.empty:
+        return []
+
+    blocks = []
+    start = prev = real["parsed_date"].iloc[0]
+    for current in real["parsed_date"].iloc[1:]:
+        if (current - prev).days > max_gap_days:
+            blocks.append((start, prev))
+            start = current
+        prev = current
+    blocks.append((start, prev))
+    return blocks
 
 
 def _finish(fig, path, suptitle):
@@ -128,8 +147,8 @@ def _dense_metric_panels(df, suptitle, out_path, kind):
         mk = dict(marker="o", markersize=4) if use_markers else {}
 
         if kind == "mean":
-            ax.fill_between(dates, d["new_min"], d["new_max"], color=info["color"], alpha=0.13,
-                            linewidth=0, label="min–max range")
+            ax.fill_between(dates, d["new_min"], d["new_max"], color=RANGE_FILL_COLOR, alpha=0.26,
+                            linewidth=0.45, edgecolor=RANGE_EDGE_COLOR, label="min-max range")
             ax.plot(dates, d["new_mean"], color=info["color"], linewidth=1.8, label="period mean", **mk)
             ax.set_ylabel(f"{info['name']}\n({info['unit']})")
 
@@ -209,6 +228,63 @@ def _dense_significance(df, suptitle, out_path):
     _format_time_axis(axes[-1])
     axes[-1].set_xlabel("Period (new period date)")
     _finish(fig, out_path, suptitle)
+
+
+def _zoomed_metric_significance(df, metric, start, end, block_num, plots_dir):
+    info = _info(metric)
+    d = _metric_rows(df, metric)
+    window = d[(d["parsed_date"] >= start) & (d["parsed_date"] <= end)].copy()
+    if window.empty:
+        return
+
+    dates = window["parsed_date"].to_numpy()
+    lw = _neg_log10p(window["p_welch"])
+    ll = _neg_log10p(window["p_levene"])
+    mean_sig = _as_bool(window["mean_shift"])
+    var_sig = _as_bool(window["variance_shift"])
+
+    fig, ax = plt.subplots(figsize=(10.5, 4.8))
+    ax.axhspan(0, LOG_ALPHA, color="gray", alpha=0.12, linewidth=0)
+    ax.axhline(LOG_ALPHA, color="#d62728", linestyle="--", linewidth=1.0, alpha=0.7,
+               label=f"alpha = {ALPHA} threshold")
+
+    use_markers = len(window) <= 45
+    mk = dict(marker="o", markersize=4) if use_markers else {}
+    ax.plot(dates, lw, color=info["color"], linewidth=1.5, alpha=0.95, label="Welch (mean shift)", **mk)
+    ax.plot(dates, ll, color=LEVENE_COLOR, linewidth=1.35, alpha=0.85, label="Levene (variance shift)", **mk)
+
+    if (~mean_sig).any():
+        ax.scatter(dates[~mean_sig], lw[~mean_sig], facecolors="none", edgecolors=info["color"],
+                   s=42, linewidths=1.3, zorder=5, label="mean: not significant")
+    if (~var_sig).any():
+        ax.scatter(dates[~var_sig], ll[~var_sig], facecolors="none", edgecolors=LEVENE_COLOR,
+                   s=42, linewidths=1.3, zorder=5, label="variance: not significant")
+
+    y_max = min(max(float(np.nanmax([lw.max(), ll.max(), LOG_ALPHA])) + 1.0, LOG_ALPHA + 1.0), P_FLOOR_LOG + 1)
+    ax.set_ylim(-0.2, y_max)
+    ax.set_xlim(start, end)
+    ax.set_ylabel("-log10(p)\n(higher = stronger)")
+    ax.set_xlabel("Day-to-day comparison date")
+    ax.set_title(f"{info['name']} real-data block {block_num}: {start:%Y-%m-%d} to {end:%Y-%m-%d}", loc="left")
+    ax.margins(x=0.02)
+    _format_time_axis(ax)
+    ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), borderaxespad=0.0)
+
+    filename = f"day_to_day_{metric}_stats_tests_zoom_{block_num}.png"
+    _finish(fig, os.path.join(plots_dir, filename), f"Day To Day: {info['name']} Test Significance Zoom")
+
+
+def generate_day_to_day_zoomed_significance(csv_path, plots_dir, metrics=("temperature", "pressure")):
+    df = pd.read_csv(csv_path)
+    if df.empty:
+        return
+
+    df["parsed_date"] = pd.to_datetime(df["new_period"], errors="coerce")
+    for metric in metrics:
+        d = _metric_rows(df, metric)
+        blocks = _real_data_blocks(d)
+        for block_num, (start, end) in enumerate(blocks, 1):
+            _zoomed_metric_significance(df, metric, start, end, block_num, plots_dir)
 
 
 # --------------------------------------------------------------------------
@@ -330,6 +406,9 @@ def generate_category_plots(csv_path, plots_dir):
         metric_panels(df, f"{pretty}: Volatility (Std Dev) Over Time", os.path.join(plots_dir, f"{category}_stds.png"), "std")
         metric_panels(df, f"{pretty}: Standardized Mean (Z-Score)", os.path.join(plots_dir, f"{category}_zscores.png"), "zscore")
         significance(df, f"{pretty}: Test Significance vs Time (α = {ALPHA})", os.path.join(plots_dir, f"{category}_stats_tests.png"))
+
+        if category == "day_to_day":
+            generate_day_to_day_zoomed_significance(csv_path, plots_dir)
 
         print(f"  done ({'time-series' if is_dense else 'bar'} layout)")
         print("-" * 50)

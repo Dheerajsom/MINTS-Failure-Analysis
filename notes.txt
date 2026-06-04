@@ -1,0 +1,5 @@
+Make min/max range more visible
+Zoom into significance test periods
+Compare normal dist. and (new) stat test that makes the fit nicer
+On the side of each graph, keep a sample standard graph that shows the p values/z-score
+Check distribution graphs for the new stats test we looked into

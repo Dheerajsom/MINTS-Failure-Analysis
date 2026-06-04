@@ -1,0 +1,5 @@
+field,comparison,sample,test,statistic,p_value,n,mean,std
+PM1.0,Last 2 Months,Month 1 (2026-03-28 to 2026-04-28),One-sample KS vs standard normal after z-scoring,0.257519,0.0,9216,3.134272,3.999828
+PM1.0,Last 2 Months,Month 1 (2026-03-28 to 2026-04-28),D'Agostino-Pearson normality test,4623.210868,0.0,9216,3.134272,3.999828
+PM1.0,Last 2 Months,Month 2 (2026-04-28 to 2026-05-28),One-sample KS vs standard normal after z-scoring,0.282117,0.0,8641,2.443707,3.463107
+PM1.0,Last 2 Months,Month 2 (2026-04-28 to 2026-05-28),D'Agostino-Pearson normality test,5718.102273,0.0,8641,2.443707,3.463107
