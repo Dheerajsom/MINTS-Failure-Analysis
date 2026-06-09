@@ -1,1 +1,2 @@
-> Generate plots for a constant window (2025 and 2026) 
+> Generate animation plots for all PMs with 1-second resolution and 1-min time window
+> Update presentation
