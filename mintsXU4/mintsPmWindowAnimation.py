@@ -1,12 +1,17 @@
 # ***************************************************************************
-#  PM1.0 Moving Window PDF Animation
-#  ---------------------------------
-#  Builds a time-series animation for pm1_0 from the bundled vaLo Node CSV.
-#  Each frame highlights a one-hour window and updates a PDF panel on the
+#  PM Moving Window PDF Animation
+#  ------------------------------
+#  Builds a time-series animation for a chosen PM channel from the vaLo Node
+#  data. Each frame highlights a one-hour window and updates a PDF panel on the
 #  left side of the y-axis for the values inside that current window.
+#
+#  Data sources (in precedence order):
+#    --data-dir : directory of valo_node_01_*.csv.gz daily files (full 1s set)
+#    --csv      : single Influx-style CSV (downsampled bundle)
 # ***************************************************************************
 
 import argparse
+import glob
 import os
 import tempfile
 from pathlib import Path
@@ -30,20 +35,46 @@ from mintsDriftAnalysis import HARD_BOUNDS, load_pivoted_dataframe
 
 CSV_PATH = Path(__file__).resolve().parent / "data" / "valo_node_01_full_year.csv"
 OUT_DIR = Path(__file__).resolve().parent / "output" / "animations"
-DEFAULT_OUT = OUT_DIR / "pm1_0_1h_window_pdf_timeseries.gif"
 
-FIELD = "pm1_0"
-FIELD_LABEL = "PM1.0"
 FIELD_UNIT = "ug/m^3"
 WINDOW = pd.Timedelta(hours=1)
+DEFAULT_BOUNDS = (0.0, 10000.0)
+
+
+def field_label(field):
+    """Derive a display label, e.g. pm1_0 -> PM1.0, pm2_5 -> PM2.5, pm10_0 -> PM10.0."""
+    body = field[2:] if field.lower().startswith("pm") else field
+    return "PM" + body.replace("_", ".")
+
+
+def field_bounds(field):
+    """Hard clipping bounds for a field, falling back to the generic PM range."""
+    return HARD_BOUNDS.get(field, DEFAULT_BOUNDS)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Animate pm1_0 time series with a moving one-hour window PDF."
+        description="Animate a PM channel time series with a moving one-hour window PDF."
+    )
+    parser.add_argument(
+        "--field",
+        type=str,
+        default="pm1_0",
+        help="PM channel to animate (e.g. pm0_5, pm1_0, pm2_5, pm10_0).",
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=None,
+        help="Directory of valo_node_01_*.csv.gz daily files. Takes precedence over --csv.",
     )
     parser.add_argument("--csv", type=Path, default=CSV_PATH, help="Input Influx-style CSV path.")
-    parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="Output animation path (.gif or .html).")
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Output animation path (.gif or .html). Defaults to output/animations/<field>_1h_window_pdf_timeseries.gif.",
+    )
     parser.add_argument(
         "--step-minutes",
         type=float,
@@ -72,18 +103,61 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_pm_series(csv_path):
+def load_pm_series(csv_path, field):
     df, metric_cols = load_pivoted_dataframe(str(csv_path))
     if df is None:
         raise FileNotFoundError(f"Could not load {csv_path}")
-    if FIELD not in metric_cols:
-        raise ValueError(f"Field '{FIELD}' was not found. Available metrics: {metric_cols}")
+    if field not in metric_cols:
+        raise ValueError(f"Field '{field}' was not found. Available metrics: {metric_cols}")
 
-    series = pd.to_numeric(df[FIELD], errors="coerce").dropna().sort_index()
-    low, high = HARD_BOUNDS[FIELD]
+    series = pd.to_numeric(df[field], errors="coerce").dropna().sort_index()
+    low, high = field_bounds(field)
     series = series[(series >= low) & (series <= high)]
     if series.empty:
-        raise ValueError(f"No valid {FIELD} values found after numeric coercion and hard-bound filtering.")
+        raise ValueError(f"No valid {field} values found after numeric coercion and hard-bound filtering.")
+    return series
+
+
+def load_pm_series_from_dir(data_dir, field):
+    """Stream a single PM field out of the gzipped daily files in *data_dir*.
+
+    Only rows for the requested field are kept from each file before
+    concatenation, so peak memory stays well below loading all PM channels.
+    """
+    data_dir = Path(data_dir)
+    files = sorted(glob.glob(str(data_dir / "valo_node_01_*.csv.gz")))
+    if not files:
+        raise FileNotFoundError(f"No valo_node_01_*.csv.gz files found in {data_dir}")
+
+    frames = []
+    for fpath in files:
+        try:
+            chunk = pd.read_csv(
+                fpath,
+                compression="gzip",
+                comment="#",
+                usecols=["_time", "_value", "_field"],
+            )
+        except (ValueError, pd.errors.EmptyDataError):
+            # Header-only / empty chunk files (sensor offline gaps) — skip.
+            continue
+        chunk = chunk.loc[chunk["_field"] == field, ["_time", "_value"]]
+        if not chunk.empty:
+            frames.append(chunk)
+
+    if not frames:
+        raise ValueError(f"No rows for field '{field}' across {len(files)} files in {data_dir}.")
+
+    raw = pd.concat(frames, ignore_index=True)
+    idx = pd.to_datetime(raw["_time"], utc=True, errors="coerce")
+    values = pd.to_numeric(raw["_value"], errors="coerce")
+    series = pd.Series(values.to_numpy(), index=idx, name=field)
+    series = series[series.index.notna()].dropna().sort_index()
+
+    low, high = field_bounds(field)
+    series = series[(series >= low) & (series <= high)]
+    if series.empty:
+        raise ValueError(f"No valid {field} values found after numeric coercion and hard-bound filtering.")
     return series
 
 
@@ -126,7 +200,7 @@ def pdf_for_window(values, y_grid):
         return stats.norm.pdf(y_grid, loc=float(np.mean(data)), scale=float(np.std(data)))
 
 
-def make_animation(series, times, out_path, fps, dpi, background_points):
+def make_animation(series, times, out_path, fps, dpi, background_points, field_label_text):
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     ymin = max(0.0, float(series.quantile(0.001)) - 0.1 * float(series.std()))
@@ -161,7 +235,7 @@ def make_animation(series, times, out_path, fps, dpi, background_points):
 
     ts_ax.set_ylim(ymin, ymax)
     ts_ax.set_xlim(dates[0], dates[-1])
-    ts_ax.set_ylabel(f"{FIELD_LABEL} ({FIELD_UNIT})")
+    ts_ax.set_ylabel(f"{field_label_text} ({FIELD_UNIT})")
     ts_ax.yaxis.tick_right()
     ts_ax.yaxis.set_label_position("right")
     ts_ax.set_xlabel("Date/time")
@@ -171,7 +245,7 @@ def make_animation(series, times, out_path, fps, dpi, background_points):
 
     pdf_ax.set_ylim(ymin, ymax)
     pdf_ax.set_xlabel("PDF")
-    pdf_ax.set_ylabel(f"{FIELD_LABEL} ({FIELD_UNIT})")
+    pdf_ax.set_ylabel(f"{field_label_text} ({FIELD_UNIT})")
     pdf_ax.invert_xaxis()
     pdf_ax.grid(True, alpha=0.25)
     pdf_ax.spines["right"].set_linewidth(1.5)
@@ -229,7 +303,7 @@ def make_animation(series, times, out_path, fps, dpi, background_points):
             pdf_mean.set_ydata([ymin, ymin])
             stats_text.set_text(f"Window: {start_time:%Y-%m-%d %H:%M} to {end_time:%Y-%m-%d %H:%M}\nn=0")
 
-        title.set_text(f"{FIELD_LABEL} Time Series with Moving 1-Hour Window PDF ({frame_num + 1}/{len(times)})")
+        title.set_text(f"{field_label_text} Time Series with Moving 1-Hour Window PDF ({frame_num + 1}/{len(times)})")
         return window_line, window_points, current_line, pdf_line, pdf_mean, stats_text, title, window_band
 
     ani = animation.FuncAnimation(fig, update, frames=len(times), interval=1000 / fps, blit=False)
@@ -249,11 +323,26 @@ def make_animation(series, times, out_path, fps, dpi, background_points):
 
 def main():
     args = parse_args()
-    series = load_pm_series(args.csv)
+    field = args.field
+    label = field_label(field)
+
+    out_path = args.out
+    if out_path is None:
+        out_path = OUT_DIR / f"{field}_1h_window_pdf_timeseries.gif"
+
+    if args.data_dir is not None:
+        print(f"Loading {field} from gzip directory {args.data_dir} ...")
+        series = load_pm_series_from_dir(args.data_dir, field)
+    else:
+        print(f"Loading {field} from CSV {args.csv} ...")
+        series = load_pm_series(args.csv, field)
+
     times = frame_times(series, args.step_minutes, args.max_frames)
-    out_path = make_animation(series, times, args.out, args.fps, args.dpi, args.background_points)
+    out_path = make_animation(
+        series, times, out_path, args.fps, args.dpi, args.background_points, label
+    )
     print(f"Saved {out_path}")
-    print(f"Frames: {len(times)} | Window: 1 hour | Step: {args.step_minutes:g} minutes")
+    print(f"Field: {field} ({label}) | Frames: {len(times)} | Window: 1 hour | Step: {args.step_minutes:g} minutes")
     print(f"Data range: {series.index.min()} to {series.index.max()} | Points: {len(series)}")
 
 
