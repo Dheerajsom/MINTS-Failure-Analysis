@@ -1,0 +1,9 @@
+# Bulk InfluxDB downloads (can be many GB at 1 s resolution)
+mintsXU4/data/valo_node_01_1s/
+*.csv.part
+*.csv.part.gz
+
+# Local noise
+__pycache__/
+*.pyc
+.DS_Store
