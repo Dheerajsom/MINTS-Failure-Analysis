@@ -25,6 +25,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.animation as animation
 import matplotlib.dates as mdates
+import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -229,9 +230,12 @@ def make_animation(series, times, out_path, fps, dpi, background_points, field_l
     current_line = ts_ax.axvline(dates[0], color="#1f2937", linewidth=1.0, alpha=0.8)
     window_band = ts_ax.axvspan(dates[0], dates[0], color="#f59f00", alpha=0.20)
 
-    pdf_line, = pdf_ax.plot([], [], color="#0f766e", linewidth=2.1)
-    pdf_fill = None
-    pdf_mean = pdf_ax.axhline(ymin, color="#0f766e", linestyle="--", linewidth=1.0, alpha=0.75)
+    pdf_line, = pdf_ax.plot([], [], color="#111827", linewidth=1.6, zorder=3)
+    pdf_grad_im = None
+    pdf_grad_clip = None
+    # Smooth vertical jet ramp (one column): row 0 -> ymin (blue), last row -> ymax (red).
+    jet_gradient = np.linspace(0.0, 1.0, 256).reshape(-1, 1)
+    pdf_mean = pdf_ax.axhline(ymin, color="#111827", linestyle="--", linewidth=1.0, alpha=0.75, zorder=4)
 
     ts_ax.set_ylim(ymin, ymax)
     ts_ax.set_xlim(dates[0], dates[-1])
@@ -265,7 +269,7 @@ def make_animation(series, times, out_path, fps, dpi, background_points, field_l
     )
 
     def update(frame_num):
-        nonlocal window_band, pdf_fill
+        nonlocal window_band, pdf_grad_im, pdf_grad_clip
 
         end_time = times[frame_num]
         start_time = end_time - WINDOW
@@ -287,10 +291,34 @@ def make_animation(series, times, out_path, fps, dpi, background_points, field_l
         )
 
         pdf_line.set_data(pdf, y_grid)
-        pdf_ax.set_xlim(max(float(pdf.max()) * 1.12, 1.0), 0.0)
-        if pdf_fill is not None:
-            pdf_fill.remove()
-        pdf_fill = pdf_ax.fill_betweenx(y_grid, 0, pdf, color="#0f766e", alpha=0.18)
+        xmax = max(float(pdf.max()) * 1.12, 1.0)
+        pdf_ax.set_xlim(xmax, 0.0)
+
+        # Jet gradient fill under the PDF curve: low PM -> blue, high PM -> red.
+        if pdf_grad_im is not None:
+            pdf_grad_im.remove()
+        if pdf_grad_clip is not None:
+            pdf_grad_clip.remove()
+        verts = np.column_stack(
+            [
+                np.concatenate([[0.0], pdf, [0.0]]),
+                np.concatenate([[y_grid[0]], y_grid, [y_grid[-1]]]),
+            ]
+        )
+        pdf_grad_clip = patches.Polygon(
+            verts, closed=True, transform=pdf_ax.transData, facecolor="none", edgecolor="none"
+        )
+        pdf_ax.add_patch(pdf_grad_clip)
+        pdf_grad_im = pdf_ax.imshow(
+            jet_gradient,
+            aspect="auto",
+            cmap="jet",
+            origin="lower",
+            extent=[0.0, xmax, ymin, ymax],
+            alpha=0.9,
+            zorder=1,
+        )
+        pdf_grad_im.set_clip_path(pdf_grad_clip)
 
         if len(values):
             mean_val = float(values.mean())

@@ -3,6 +3,10 @@ mintsXU4/data/valo_node_01_1s/
 *.csv.part
 *.csv.part.gz
 
+# Jet-colormap PM animations: rendered as GIFs (~600 MB each) then re-encoded
+# to MP4 (~12 MB). Keep the GIFs on disk but track only the MP4s.
+mintsXU4/output/animations/*.gif
+
 # Local noise
 __pycache__/
 *.pyc
