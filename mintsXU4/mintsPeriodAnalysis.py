@@ -28,7 +28,7 @@ CSV_COLUMNS = [
     "sensor", "metric", "granularity", "old_period", "new_period",
     "old_n", "new_n", "old_mean", "new_mean", "mean_delta", "old_std", "new_std",
     "old_min", "old_max", "new_min", "new_max",
-    "p_welch", "p_levene", "mean_shift", "variance_shift",
+    "cohens_d", "std_ratio", "p_welch", "p_levene", "mean_shift", "variance_shift",
 ]
 
 
@@ -67,6 +67,8 @@ def _row(sensor, metric, granularity, old_label, new_label, old_vals, new_vals, 
         "old_max": round(float(old_vals.max()), 4),
         "new_min": round(float(new_vals.min()), 4),
         "new_max": round(float(new_vals.max()), 4),
+        "cohens_d": round(result["cohens_d"], 4),
+        "std_ratio": round(result["std_ratio"], 4),
         "p_welch": format(result["p_welch"], ".2e"),
         "p_levene": format(result["p_levene"], ".2e"),
         "mean_shift": result["mean_shift"],
@@ -96,7 +98,7 @@ def _consecutive_comparisons(df, metric_cols, granularity, freq, label_fmt, p_al
         for metric in metric_cols:
             buckets = _bucketize(sensor_df[metric], freq, min_samples)
             for (old_period, old_vals), (new_period, new_vals) in zip(buckets, buckets[1:]):
-                result = sample_comparison(old_vals, new_vals, p_alpha)
+                result = sample_comparison(old_vals, new_vals, p_alpha, metric=metric)
                 rows.append(_row(
                     sensor, metric, granularity,
                     old_period.strftime(label_fmt), new_period.strftime(label_fmt),
@@ -115,7 +117,7 @@ def _first_vs_last_month(df, metric_cols, p_alpha, min_samples):
                 continue
             (first_period, first_vals) = months[0]
             (last_period, last_vals) = months[-1]
-            result = sample_comparison(first_vals, last_vals, p_alpha)
+            result = sample_comparison(first_vals, last_vals, p_alpha, metric=metric)
             rows.append(_row(
                 sensor, metric, "first_vs_last_month",
                 first_period.strftime("%Y-%m"), last_period.strftime("%Y-%m"),

@@ -1,5 +1,0 @@
-field,comparison,sample,test,statistic,p_value,n,mean,std
-PM1.0,Mar 1-Apr 1 2025 vs 2026,Mar 1-Apr 1 2025,One-sample KS vs standard normal after z-scoring,0.272298,0.0,9215,4.644229,7.374564
-PM1.0,Mar 1-Apr 1 2025 vs 2026,Mar 1-Apr 1 2025,D'Agostino-Pearson normality test,8300.067999,0.0,9215,4.644229,7.374564
-PM1.0,Mar 1-Apr 1 2025 vs 2026,Mar 1-Apr 1 2026,One-sample KS vs standard normal after z-scoring,0.147459,0.0,8927,1.739699,1.479046
-PM1.0,Mar 1-Apr 1 2025 vs 2026,Mar 1-Apr 1 2026,D'Agostino-Pearson normality test,5379.031041,0.0,8927,1.739699,1.479046

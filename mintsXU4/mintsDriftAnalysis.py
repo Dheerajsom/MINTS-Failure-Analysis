@@ -46,6 +46,46 @@ HARD_BOUNDS = {
 
 }
 
+# --------------------------------------------------------------------------
+# Practical-significance gates (shared by streaming + period analysis)
+# --------------------------------------------------------------------------
+# With large, autocorrelated samples a Welch/Levene p-value collapses toward 0 for
+# practically meaningless shifts (e.g. PM1.0 moving 0.3 µg/m³ over ~8000 readings still
+# yields p < 1e-15). Statistical significance is therefore necessary but NOT sufficient:
+# we additionally require a minimum *effect size* before flagging drift. Effect sizes are
+# scale-free and, unlike p-values, do not inflate with sample size or autocorrelation.
+#   - MIN_COHENS_D : Cohen's "small" effect floor for a real mean shift (0.2 = small,
+#                    0.5 = medium, 0.8 = large). Raise toward 0.5 to alert only on
+#                    operationally meaningful PM drift.
+#   - MIN_STD_RATIO: spread must change by >= +50% or <= -33% to count as a variance shift.
+# Both are intentionally conservative defaults — tune against ground-truth events.
+MIN_COHENS_D = 0.2
+MIN_STD_RATIO = 1.5
+
+# Smallest move of a *constant* level that counts as a step-change between two flat
+# windows, per metric (units match HARD_BOUNDS). Replaces the old single 0.01 threshold,
+# which was far too small for some metrics (0.01 µg/m³ PM is noise; 0.01 V shunt is not).
+FLAT_MEAN_SHIFT_THRESHOLDS = {
+    'temperature':  0.05,   # °C
+    'humidity':     0.2,    # %RH
+    'pressure':     0.05,   # hPa
+    'pm1_0':        0.1,    # µg/m³
+    'shuntVoltage': 0.001,  # V
+}
+DEFAULT_FLAT_MEAN_SHIFT = 0.01
+
+# --------------------------------------------------------------------------
+# Recommended deeper enhancements (not yet implemented — see audit notes):
+#   1. Autocorrelation-aware effective sample size (n_eff) for the Welch/Levene tests so
+#      the reported p-values are honest, e.g. n_eff = n*(1-rho)/(1+rho) for AR(1).
+#      The effect-size gates above already neutralize the resulting false-alarm flood,
+#      so this is a reporting-accuracy improvement rather than a correctness blocker.
+#   2. MAD-based modified z-score (median/MAD) for the per-reading detector — robust to
+#      the very outliers a mean/std z-score is non-robust against (masking/swamping).
+#   3. A Page-Hinkley / CUSUM layer for faster abrupt-shift detection than the 200-sample
+#      window lag. (The consecutive-outlier step-change logic is a lightweight stand-in.)
+# --------------------------------------------------------------------------
+
 # --------------------------------------------------
 # MQTT Alert Publishing (we will utilize this later)
 # --------------------------------------------------
@@ -186,22 +226,28 @@ def parse_and_process_valo_data(file_path, engine=None):
 # SAFE Logic
 # -----------
 
-# Compare two samples and return descriptive stats + drift-test results
-def sample_comparison(old, new, p_alpha=0.01):
-    
+# Compare two samples and return descriptive stats + drift-test results.
+# `metric` (optional) selects the per-metric flat-step threshold.
+def sample_comparison(old, new, p_alpha=0.01, metric=None):
+
     old = np.asarray(old, dtype=float)
     new = np.asarray(new, dtype=float)
+
+    n_old = int(old.size)
+    n_new = int(new.size)
 
     old_var = float(np.var(old))
     new_var = float(np.var(new))
 
+    old_std = old_var ** 0.5
+    new_std = new_var ** 0.5
+
     old_mean = float(np.mean(old))
     new_mean = float(np.mean(new))
+    mean_delta = new_mean - old_mean
 
-    # Variance below this is basically flat --> the mean must move 
-    # more than this to count as a real shift rather than noise
+    # Variance below this is basically flat
     FLAT_VAR_THRESHOLD = 1e-12
-    MEAN_SHIFT_THRESHOLD = 0.01
 
     old_flat = old_var < FLAT_VAR_THRESHOLD
     new_flat = new_var < FLAT_VAR_THRESHOLD
@@ -209,11 +255,28 @@ def sample_comparison(old, new, p_alpha=0.01):
     both_flat = old_flat and new_flat
     half_flat = old_flat != new_flat
 
-    mean_val_changed = abs(old_mean - new_mean) > MEAN_SHIFT_THRESHOLD
+    # Per-metric "did the constant level move" threshold (flat-vs-flat step change)
+    flat_threshold = FLAT_MEAN_SHIFT_THRESHOLDS.get(metric, DEFAULT_FLAT_MEAN_SHIFT)
+    mean_val_changed = abs(mean_delta) > flat_threshold
+
+    # Cohen's d (pooled SD): scale-free practical magnitude of the mean shift. Unlike the
+    # p-value it does not inflate with sample size or autocorrelation, so it is the right
+    # second gate against large-n false positives.
+    denom = n_old + n_new - 2
+    pooled_std = ((n_old * old_var + n_new * new_var) / denom) ** 0.5 if denom > 0 else 0.0
+    cohens_d = mean_delta / pooled_std if pooled_std > 1e-12 else 0.0
+
+    # Directional fold-change in spread; inf when only one side is flat (regime change).
+    if old_std > 1e-12:
+        std_ratio = new_std / old_std
+    elif new_std > 1e-12:
+        std_ratio = float('inf')
+    else:
+        std_ratio = 1.0
 
     if both_flat:
 
-        # Two constant arrays --> Drift = did the mean move
+        # Two constant arrays --> SciPy tests are meaningless; drift = did the level move
         p_welch = 1.0
         p_levene = 1.0
         mean_shift = mean_val_changed
@@ -222,38 +285,50 @@ def sample_comparison(old, new, p_alpha=0.01):
     else:
 
         _, p_welch = stats.ttest_ind(old, new, equal_var=False)
-        _, p_levene = stats.levene(old, new, center="mean")
+        # Brown-Forsythe (median-centered) Levene: robust for the skewed, heavy-tailed
+        # distributions typical of PM / environmental data. (Was center="mean".)
+        _, p_levene = stats.levene(old, new, center="median")
 
         p_welch = 1.0 if np.isnan(p_welch) else max(p_welch, 1e-15)
         p_levene = 1.0 if np.isnan(p_levene) else max(p_levene, 1e-15)
 
-        mean_shift = p_welch < p_alpha
-        variance_shift = p_levene < p_alpha
+        # Two-gate rule: statistically significant AND practically meaningful.
+        mean_shift = (p_welch < p_alpha) and (abs(cohens_d) >= MIN_COHENS_D)
+        variance_shift = (p_levene < p_alpha) and (
+            std_ratio >= MIN_STD_RATIO or std_ratio <= 1.0 / MIN_STD_RATIO
+        )
 
     return{
 
-        'old_n': int(old.size),
-        'new_n': int(new.size),
+        'old_n': n_old,
+        'new_n': n_new,
         'old_mean': old_mean,
         'new_mean': new_mean,
-        'mean_delta': new_mean - old_mean,
-        'old_std': old_var ** 0.5,
-        'new_std': new_var ** 0.5,
+        'mean_delta': mean_delta,
+        'old_std': old_std,
+        'new_std': new_std,
         'old_var': old_var,
         'new_var': new_var,
         'both_flat': both_flat,
         'half_flat': half_flat,
         'mean_val_changed': mean_val_changed,
+        'cohens_d': float(cohens_d),
+        'std_ratio': float(std_ratio),
         'p_welch': float(p_welch),
         'p_levene': float(p_levene),
         'mean_shift': bool(mean_shift),
         'variance_shift': bool(variance_shift),
-        
+
     }
 
 
 class SensorDrift:
 
+    # NOTE on z_threshold: 3.5 is the Iglewicz-Hoaglin cutoff for the *modified* z-score
+    # (median/MAD based). This detector uses a classic mean/std z-score, for which ~3.0 is
+    # the conventional cutoff; 3.5 here is therefore slightly conservative. A mean/std
+    # z-score is also non-robust to the outliers it hunts (a burst inflates mean/std and
+    # masks later outliers) — a rolling median/MAD modified z-score would be more robust.
     def __init__(self, window_size=200, z_threshold=3.5, p_alpha=0.01):
 
         self.window_size = window_size
@@ -458,7 +533,7 @@ class SensorDrift:
         # Compare the older half of the window against the newer half
         mid = len(data) // 2
         
-        result = sample_comparison(data[:mid], data[mid:], self.p_alpha)
+        result = sample_comparison(data[:mid], data[mid:], self.p_alpha, metric=metric)
 
         old_mean = result['old_mean']
         new_mean = result['new_mean']
@@ -507,6 +582,8 @@ class SensorDrift:
                 "metric": metric,
                 "mean_shift": mean_shift_detected,
                 "variance_shift": variance_shift_detected,
+                "cohens_d": round(result['cohens_d'], 3),
+                "std_ratio": round(result['std_ratio'], 3),
                 "p_welch": format(result['p_welch'], ".2e"),
                 "p_levene": format(result['p_levene'], ".2e")
             }, data_time_str)
