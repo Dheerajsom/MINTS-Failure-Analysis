@@ -11,3 +11,9 @@ mintsXU4/output/animations/*.gif
 __pycache__/
 *.pyc
 .DS_Store
+
+# Packaging / test caches
+*.egg-info/
+.pytest_cache/
+build/
+dist/

@@ -94,6 +94,7 @@ def _period_row(field, stem, op, npd, ov, nv, fmt):
         "sensor": SENSOR, "metric": field, "granularity": stem,
         "old_period": op.strftime(fmt), "new_period": npd.strftime(fmt),
         "old_n": int(ov.size), "new_n": int(nv.size),
+        "old_n_eff": res["old_n_eff"], "new_n_eff": res["new_n_eff"],
         "old_mean": round(float(ov.mean()), 4), "new_mean": round(float(nv.mean()), 4),
         "mean_delta": round(float(nv.mean() - ov.mean()), 4),
         "old_std": round(float(ov.std()), 4), "new_std": round(float(nv.std()), 4),

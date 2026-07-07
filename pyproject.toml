@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mints-safe"
+version = "1.0.0"
+description = "SAFE — Sensor Analysis and Failure Evaluation for MINTS low-cost air-quality sensor nodes"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+# Live-node extras used by the legacy mintsXU4 sensor/MQTT scripts
+sensor = [
+    "pyserial",
+    "paho-mqtt",
+    "getmac",
+    "pynmea2",
+    "netifaces",
+    "pyyaml",
+]
+dev = [
+    "pytest",
+]
+
+[project.scripts]
+safe = "safe.cli:main"
+
+[tool.setuptools]
+packages = ["safe"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

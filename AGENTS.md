@@ -4,76 +4,81 @@ Guidance for coding agents working in this repository.
 
 ## Project
 
-SAFE, Sensor Analysis and Failure Evaluation, is a Python analysis project for MINTS low-cost air-quality sensor data. It detects outliers, drift, distribution changes, and period-over-period changes.
+SAFE, Sensor Analysis and Failure Evaluation, is a Python analysis project for
+MINTS low-cost air-quality sensor data. It detects outliers, drift,
+distribution changes, and period-over-period changes.
 
-Bundled source data lives at `mintsXU4/data/valo_node_01_full_year.csv`. Generated outputs live under `mintsXU4/output/`.
+The core lives in the `safe` package at the repo root; `mintsXU4/` holds thin
+compatibility shims plus older live-sensor utilities. Bundled source data
+lives at `mintsXU4/data/valo_node_01_full_year.csv`. Generated outputs live
+under `mintsXU4/output/`.
 
 ## Setup
 
-Install dependencies from the repository root:
-
 ```bash
-pip install -r requirements.txt
+pip install -e ".[dev]"
 ```
 
-Main dependencies include `numpy`, `scipy`, `pandas`, `matplotlib`, `openpyxl`, and older sensor/network packages such as `pyserial`, `paho-mqtt`, and `pyyaml`.
+Core dependencies: `numpy`, `scipy`, `pandas`, `matplotlib`. The `sensor`
+extra adds the legacy live-node packages (`pyserial`, `paho-mqtt`, `pyyaml`, ...).
 
 ## Common Commands
 
 ```bash
-python mintsXU4/mintsDriftAnalysis.py
+python -m pytest tests/                 # test suite — run this first
+safe stream mintsXU4/data/valo_node_01_full_year.csv
+safe periods mintsXU4/data/valo_node_01_full_year.csv -o mintsXU4/output
+python mintsXU4/mintsDriftAnalysis.py   # legacy entry points still work
 python mintsXU4/mintsPeriodAnalysis.py
-python mintsXU4/mintsPeriodPlotter.py
 python dataVisualizer.py
 ```
 
-Syntax check:
-
-```bash
-python -m py_compile dataVisualizer.py mintsXU4/mintsDriftAnalysis.py mintsXU4/mintsPeriodAnalysis.py mintsXU4/mintsPeriodPlotter.py mintsXU4/mintsDefinitions.py mintsXU4/mintsLatest.py mintsXU4/mintsSensorReader.py
-```
-
-There is no automated test suite. For behavior changes, run the most relevant script against the bundled CSV and inspect the generated CSV/PNG outputs.
-
 ## Key Files
 
-- `mintsXU4/mintsDriftAnalysis.py`: Core SAFE drift engine. Source of truth for `HARD_BOUNDS`, `sample_comparison()`, z-score outliers, step-change detection, Welch mean-shift tests, and Levene variance-shift tests.
-- `mintsXU4/mintsPeriodAnalysis.py`: Builds day/week/month/year and first-vs-last-month comparisons using the shared drift math.
-- `mintsXU4/mintsPeriodPlotter.py`: Generates period plots from `period_*.csv` files using headless matplotlib.
-- `dataVisualizer.py`: Compares `pm1_0` and `temperature` distributions, fits SciPy distributions, and writes histogram/stat summaries.
-- `mintsXU4/mintsDefinitions.py`, `mintsXU4/mintsLatest.py`, `mintsXU4/mintsSensorReader.py`: Older/live sensor utilities. Avoid changing these unless the task is about live sensor behavior.
+- `safe/stats.py`: Source of truth for `sample_comparison()` — Welch/Levene
+  drift tests with effect-size gates and AR(1) effective-sample-size (n_eff)
+  correction.
+- `safe/engine.py`: `SensorDrift` streaming engine — hard bounds, robust
+  (median/MAD+IQR) modified z-score, step-change detection, optional
+  Page-Hinkley layer, windowed drift evaluation. `PageHinkley` is off by
+  default because ambient diurnal cycles trigger it daily.
+- `safe/config.py`: `HARD_BOUNDS`, effect-size gates, flat-step thresholds.
+- `safe/loader.py`: InfluxDB-export CSV loading (`load_pivoted_dataframe`) and
+  streaming replay (`replay_csv`).
+- `safe/periods.py` + `safe/plotting.py`: period-over-period comparisons and
+  their plots.
+- `mintsXU4/mintsDriftAnalysis.py`, `mintsXU4/mintsPeriodAnalysis.py`,
+  `mintsXU4/mintsPeriodPlotter.py`: compatibility shims re-exporting from
+  `safe`; keep them in sync when renaming public symbols.
+- `mintsXU4/mints1sLoader.py`, `mintsXU4/mintsPmRegen.py`: 1-second PM data
+  pipeline (data is git-ignored, ~5 GB local).
+- `mintsXU4/mintsDefinitions.py`, `mintsXU4/mintsLatest.py`,
+  `mintsXU4/mintsSensorReader.py`: older/live sensor utilities. Avoid changing
+  these unless the task is about live sensor behavior.
 
 ## Data Notes
 
-The bundled CSV is an InfluxDB-style export. The main loader expects:
-
-- `_time`
-- `_value`
-- `_field`
-- `_measurement`
-- `device_id`
-
-`load_pivoted_dataframe()` handles numeric coercion, duplicate removal, pivoting fields into metric columns, and timestamp normalization.
+The bundled CSV is an InfluxDB-style export. The loader expects `_time`,
+`_value`, `_field`, `_measurement`, `device_id`. `load_pivoted_dataframe()`
+handles numeric coercion, duplicate removal, pivoting fields into metric
+columns, and timestamp normalization.
 
 ## Output Notes
 
-Treat files under `mintsXU4/output/` as generated unless the user specifically asks to edit outputs.
-
-Important output areas:
+Treat files under `mintsXU4/output/` as generated. Prefer regenerating outputs
+from source scripts instead of manually editing generated CSV/PNG/Markdown
+files. Important areas:
 
 - Period CSVs/plots: `mintsXU4/output/period_*.csv`, `mintsXU4/output/plots/`
-- Older checked-in period snapshot: `mintsXU4/output/period_analysis/`
-- Distribution visualizer outputs: `mintsXU4/output/pm1_0/` and `mintsXU4/output/temperature/`
-
-Prefer regenerating outputs from source scripts instead of manually editing generated CSV/PNG/Markdown files.
+- Distribution visualizer outputs: `mintsXU4/output/<field>/`
 
 ## Coding Guidelines
 
-- Keep changes small and compatible with direct script execution from the repo root.
-- Reuse `mintsDriftAnalysis.py` for shared drift math instead of duplicating logic.
+- Put shared drift math in `safe/` — never duplicate it in scripts.
 - Use pandas/numpy vectorized operations for CSV processing.
 - Keep plotting headless with the existing matplotlib `Agg` pattern.
-- Do not add live MQTT, serial, or credential side effects to offline analysis paths.
+- Do not add live MQTT, serial, or credential side effects to offline analysis
+  paths.
 - Missing local credential YAML files should not crash imports.
 - Do not commit `__pycache__`, `.DS_Store`, credentials, or local device data.
 
@@ -81,7 +86,7 @@ Prefer regenerating outputs from source scripts instead of manually editing gene
 
 Before handing off substantial changes:
 
-1. Run `py_compile` on touched Python files.
+1. Run `python -m pytest tests/`.
 2. Run the relevant analysis or plotting script on the bundled CSV.
 3. Confirm outputs land in the expected `mintsXU4/output/` location.
 4. Check `git status --short` and call out generated files that changed.

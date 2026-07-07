@@ -1,14 +1,10 @@
-# Core analysis stack
+# Prefer `pip install -e .` (see pyproject.toml). This file mirrors the core
+# analysis dependencies for environments that expect a requirements.txt.
 numpy
 scipy
 pandas
 matplotlib
-openpyxl
 
-# Serial / sensor I/O and networking
-pyserial
-paho-mqtt
-getmac
-pynmea2
-netifaces
-pyyaml
+# Optional extras (installed via `pip install -e ".[sensor]"` / ".[dev]"):
+#   sensor: pyserial, paho-mqtt, getmac, pynmea2, netifaces, pyyaml
+#   dev:    pytest
