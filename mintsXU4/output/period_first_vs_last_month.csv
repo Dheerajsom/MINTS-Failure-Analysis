@@ -1,0 +1,4 @@
+sensor,metric,granularity,old_period,new_period,old_n,new_n,old_n_eff,new_n_eff,old_mean,new_mean,mean_delta,old_std,new_std,old_min,old_max,new_min,new_max,cohens_d,std_ratio,p_welch,p_levene,mean_shift,variance_shift
+IPS7100_MHC_001,pm1_0,first_vs_last_month,2024-08,2026-05,7840,7777,79.2,78.6,7.3524,1.9958,-5.3566,4.8263,2.2986,0.292,26.2898,0.1675,15.8414,-1.4152,0.4763,1.07e-14,4.59e-12,True,True
+IPS7100_MHC_001,pressure,first_vs_last_month,2024-08,2026-05,7840,7354,1323.6,74.3,993.5205,1027.0615,33.541,2.907,25.7693,861.4906,999.2768,983.3347,1199.9576,1.8582,8.8647,1.00e-15,1.00e-15,True,True
+IPS7100_MHC_001,temperature,first_vs_last_month,2024-08,2026-05,7840,7777,79.2,78.6,32.6296,24.2143,-8.4153,5.0701,5.8746,21.4003,46.573,12.0533,43.0561,-1.534,1.1587,1.00e-15,1.00e-01,True,False
