@@ -19,19 +19,16 @@
 # ***************************************************************************
 
 import logging
-import warnings
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
-from safe.config import HARD_BOUNDS
+from safe.config import DEFAULT_Z_THRESHOLD, HARD_BOUNDS
 from safe.stats import sample_comparison
 
 logger = logging.getLogger(__name__)
-
-warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 # Recompute the robust baseline (median / MAD) every this many accepted
 # readings. The baseline moves slowly, so refreshing periodically keeps the
@@ -46,9 +43,6 @@ STEP_CHANGE_RUN = 10
 
 # 1.4826 * MAD estimates the standard deviation of a normal distribution
 MAD_TO_SIGMA = 1.4826
-
-# Iglewicz-Hoaglin cutoff for the modified (median/MAD) z-score
-DEFAULT_Z_THRESHOLD = 3.5
 
 
 def default_alert_handler(sensor_name, alert_dict, data_time="N/A"):

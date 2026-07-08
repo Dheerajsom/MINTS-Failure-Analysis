@@ -127,10 +127,12 @@ def _first_vs_last_month(df, metric_cols, p_alpha, min_samples):
 
 
 def run_period_analysis(file_path, output_dir, p_alpha=0.01, min_samples=2, make_plots=True):
-    """Run all period comparisons on a CSV and write period_*.csv into output_dir."""
+    """Run all period comparisons on a CSV and write period_*.csv into output_dir.
+
+    Returns True on success, False when the input CSV could not be loaded."""
     df, metric_cols = load_pivoted_dataframe(file_path)
     if df is None:
-        return
+        return False
 
     print(f"Metrics found : {metric_cols}")
     print(f"Date range    : {df.index.min()}  ->  {df.index.max()}")
@@ -163,3 +165,5 @@ def run_period_analysis(file_path, output_dir, p_alpha=0.01, min_samples=2, make
             run_all_plotting(output_dir, plots_dir)
         except Exception as plot_err:
             print(f"Failed to auto-generate plots: {plot_err}")
+
+    return True

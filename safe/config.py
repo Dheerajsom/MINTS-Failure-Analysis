@@ -10,14 +10,21 @@ SENSOR_DISPLAY_NAMES = {
     'IPS7100MHC001': 'IPS7100_MHC_001',
 }
 
+# Iglewicz-Hoaglin cutoff for the modified (median/MAD) z-score
+DEFAULT_Z_THRESHOLD = 3.5
+
+# IPS7100 particulate-matter size bins (all µg/m³, cumulative by size)
+PM_BOUNDS = (0.0, 10000.0)
+PM_METRICS = ('pm0_1', 'pm0_3', 'pm0_5', 'pm1_0', 'pm2_5', 'pm5_0', 'pm10_0')
+
 # Hard physical bounds per metric. Values outside these are impossible for the
 # instrument and are treated as failures, never as data.
 HARD_BOUNDS = {
     'temperature':  (-40.0, 100.0),    # Celsius
     'humidity':     (0.0, 100.0),      # %RH
     'pressure':     (300.0, 1200.0),   # hPa
-    'pm1_0':        (0.0, 10000.0),    # µg/m³
     'shuntVoltage': (-0.320, 0.320),   # INA219 max shunt voltage range (V)
+    **{pm: PM_BOUNDS for pm in PM_METRICS},
 }
 
 # --------------------------------------------------------------------------
@@ -41,8 +48,8 @@ FLAT_MEAN_SHIFT_THRESHOLDS = {
     'temperature':  0.05,   # °C
     'humidity':     0.2,    # %RH
     'pressure':     0.05,   # hPa
-    'pm1_0':        0.1,    # µg/m³
     'shuntVoltage': 0.001,  # V
+    **{pm: 0.1 for pm in PM_METRICS},   # µg/m³
 }
 DEFAULT_FLAT_MEAN_SHIFT = 0.01
 

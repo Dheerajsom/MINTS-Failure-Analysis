@@ -9,6 +9,8 @@ import argparse
 import logging
 import sys
 
+from safe.config import DEFAULT_Z_THRESHOLD
+
 
 def _add_stream_parser(subparsers):
     p = subparsers.add_parser(
@@ -16,8 +18,8 @@ def _add_stream_parser(subparsers):
     p.add_argument("csv", help="Path to the long-format CSV export")
     p.add_argument("--window", type=int, default=200,
                    help="Evaluation window size (default: 200)")
-    p.add_argument("--z-threshold", type=float, default=3.5,
-                   help="Modified z-score outlier cutoff (default: 3.5)")
+    p.add_argument("--z-threshold", type=float, default=DEFAULT_Z_THRESHOLD,
+                   help="Modified z-score outlier cutoff (default: %(default)s)")
     p.add_argument("--alpha", type=float, default=0.01,
                    help="Significance level for the drift tests (default: 0.01)")
     p.add_argument("--page-hinkley", action="store_true",
@@ -69,9 +71,9 @@ def main(argv=None):
     if args.command == "periods":
         from safe.periods import run_period_analysis
 
-        run_period_analysis(args.csv, args.output, p_alpha=args.alpha,
-                            make_plots=not args.no_plots)
-        return 0
+        ok = run_period_analysis(args.csv, args.output, p_alpha=args.alpha,
+                                 make_plots=not args.no_plots)
+        return 0 if ok else 1
 
     return 1
 

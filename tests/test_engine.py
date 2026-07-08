@@ -35,6 +35,13 @@ class TestHardBounds:
         assert -5.0 not in state.buffer
         assert len(state.buffer) == 10
 
+    @pytest.mark.parametrize("pm_bin", ["pm0_1", "pm0_3", "pm0_5", "pm2_5", "pm5_0", "pm10_0"])
+    def test_all_pm_bins_have_bounds(self, pm_bin):
+        # The 1-second dataset streams every IPS7100 bin, not just pm1_0
+        engine = make_engine()
+        feed(engine, [10.0, -5.0], metric=pm_bin)
+        assert "hard-bounds-violation" in alert_types(engine)
+
     def test_unknown_metric_has_no_bounds(self):
         engine = make_engine()
         feed(engine, [1e9], metric="someUnknownMetric")
@@ -152,7 +159,7 @@ class TestCooldown:
         engine = make_engine(cooldown_seconds=1800, enable_page_hinkley=False)
         baseline = list(RNG.normal(10, 0.5, 60))
         feed(engine, baseline + [50.0], step=60)
-        # next spike 1 hour later
+        # next spike a day later, far past the 1800 s cooldown
         engine.data_processing(SENSOR, {
             "unix_timestamp": 1_700_000_000 + 3600 * 24, "str_timestamp": "later", "pm1_0": 50.0})
         assert alert_types(engine).count("z-score-outlier") == 2
