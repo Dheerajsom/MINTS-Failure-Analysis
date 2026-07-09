@@ -1,74 +1,201 @@
 # SAFE — Sensor Analysis & Failure Evaluation
 
-Drift detection and failure analysis for the MINTS-AI lab's low-cost air-quality
-sensor nodes deployed around the Dallas area.
+SAFE analyzes MINTS low-cost air-quality sensor data for impossible readings,
+outliers, abrupt changes, and slower statistical drift. It is designed for two
+complementary workflows:
 
-The core engine lives in the `safe` package and layers five detectors, fastest
-to slowest:
+- **Streaming replay:** process each reading as it arrives and emit alerts.
+- **Period analysis:** compare calendar periods to produce CSV summaries and
+  static plots for investigation and reporting.
 
-| Layer | Detector | Catches | Latency |
-|---|---|---|---|
-| 1 | Hard physical bounds | impossible values (e.g. negative PM) | instant |
-| 2 | Robust modified z-score (median / MAD+IQR) | single-reading outliers | instant |
-| 3 | Consecutive-outlier step-change | abrupt regime shifts | ~10 readings |
-| 4 | Page-Hinkley sequential test (opt-in) | sustained small mean shifts | tens of readings |
-| 5 | Welch + Levene windowed tests | slow mean / variance drift | one window |
+The maintained implementation is the [`safe/`](safe/) package. The
+[`mintsXU4/`](mintsXU4/) directory retains compatibility entry points and older
+live-node utilities.
 
-Two safeguards keep the windowed tests honest on real sensor data:
-
-- **Effect-size gates** — with large samples, p-values collapse toward zero for
-  meaningless shifts, so a drift flag additionally requires Cohen's *d* ≥ 0.2
-  (mean) or a ≥ 50% spread change (variance).
-- **Autocorrelation correction** — sensor readings are serially correlated, so
-  the tests use the AR(1) effective sample size
-  `n_eff = n·(1−ρ)/(1+ρ)` instead of the nominal *n*. At 5-minute resolution a
-  288-reading day typically carries only ~10–60 independent observations, and
-  the reported p-values reflect that.
-
-## Install
+## Quick start
 
 ```bash
-pip install -e .            # core package + `safe` CLI
-pip install -e ".[dev]"     # + pytest
-pip install -e ".[sensor]"  # + legacy live-node extras (serial/MQTT)
-```
+pip install -e ".[dev]"
 
-## Usage
-
-```bash
-# Replay an InfluxDB-export CSV through the streaming engine
+# Replay the bundled InfluxDB export through the streaming engine
 safe stream mintsXU4/data/valo_node_01_full_year.csv
 
-# Period-over-period analysis (day/week/month/year CSVs + plots)
+# Compare adjacent days, weeks, months, and years; write CSVs and plots
 safe periods mintsXU4/data/valo_node_01_full_year.csv -o mintsXU4/output
-```
 
-Or from Python:
-
-```python
-from safe import SensorDrift, replay_csv, sample_comparison
-
-engine = SensorDrift(on_alert=my_mqtt_publisher)
-replay_csv("data.csv", engine=engine)
-print(engine.alerts)
-```
-
-## Tests
-
-```bash
+# Run the test suite
 python -m pytest tests/
 ```
 
+The bundled data is a two-year, five-minute export for Influx measurement
+`IPS7100MHC001` (device ID `001e064a1520`). SAFE displays it as
+`IPS7100_MHC_001` in output and alerts.
+
+## How SAFE processes data
+
+InfluxDB exports are stored in a *long* format: each row contains one field
+and value. `safe.loader` validates the expected columns, coerces numeric
+values, removes duplicate records, normalizes timestamps to UTC, and pivots
+the rows into one timestamped record containing metric columns such as
+`pm1_0`, `temperature`, and `pressure`.
+
+```text
+InfluxDB-style CSV (long rows)
+        │
+        ▼
+safe.loader: validate, clean, pivot, normalize timestamps
+        │
+        ├──► safe.engine: per-reading alerts and streaming state
+        │
+        └──► safe.periods: calendar comparisons, CSVs, and plots
+```
+
+Each sensor and metric gets its own streaming state: a sliding history buffer,
+a robust baseline, an outlier streak, an optional Page-Hinkley detector, and
+per-alert cooldowns. A bad PM reading therefore cannot alter the baseline for
+temperature, nor can an alert from one sensor suppress another sensor's alert.
+
+## Streaming SAFE engine
+
+`SensorDrift` applies the following layers from fastest to slowest. A reading
+that fails a hard-bound or outlier check is kept out of the normal history, so
+obvious failures do not contaminate future comparisons.
+
+| Layer | Detector | What it catches | Typical latency |
+|---:|---|---|---|
+| 1 | Hard physical bounds | Impossible values, such as negative PM or humidity over 100% | One reading |
+| 2 | Robust modified z-score | Isolated readings far from the median/MAD+IQR baseline | One reading |
+| 3 | Consecutive-outlier rule | Abrupt level changes that persist for 10 readings | About 10 readings |
+| 4 | Page-Hinkley (optional) | Sustained smaller mean shifts in a stable stream | Tens of readings |
+| 5 | Windowed Welch + Levene tests | Practical changes in mean or variance across a full window | One evaluation window |
+
+### What happens after a potential failure
+
+- **Hard-bound violation:** alerts immediately and is never stored in the
+  metric history.
+- **Single robust outlier:** alerts (subject to cooldown) and is not stored.
+- **Ten consecutive outliers:** alerts as a step change, then reseeds the
+  history at the new level so monitoring can recover instead of rejecting all
+  subsequent readings.
+- **Windowed drift:** compares the older and newer halves of the sliding
+  buffer. Evaluations overlap by half a window to avoid gaps between checks.
+- **Cooldowns:** alerts of the same sensor, metric, and type are spaced by 30
+  minutes by default; all alerts remain available in `engine.alerts`.
+
+Hard bounds are defined for the common MINTS metrics in
+[`safe/config.py`](safe/config.py). Unknown numeric metrics can still receive
+outlier and drift analysis, but do not have a metric-specific physical bound
+unless one is added there.
+
+### Why a small p-value is not enough
+
+The shared `sample_comparison()` function in [`safe/stats.py`](safe/stats.py)
+is used by both the streaming and period-analysis paths. It prevents two common
+false-alarm patterns in environmental sensor data:
+
+- **Practical-effect gate:** a mean shift must be statistically significant
+  *and* have `|Cohen's d| >= 0.2`. A variance shift must be significant and
+  represent at least a 1.5x spread increase (or the corresponding decrease).
+- **Autocorrelation correction:** observations seconds or minutes apart are
+  related, so the engine estimates lag-1 AR(1) autocorrelation and uses an
+  effective sample size rather than treating every reading as independent.
+- **Flat-signal handling:** two constant windows are not passed through
+  meaningless variance tests; SAFE checks whether their levels moved by a
+  metric-specific amount instead.
+
+The Page-Hinkley layer is off by default. Outdoor sensor streams often contain
+real daily environmental cycles, and enabling it for ambient data can produce
+alerts for weather rather than device faults. It is more useful for stable,
+high-rate signals such as `shuntVoltage`.
+
+## Command-line usage
+
+```bash
+# Process one or more CSV/CSV.GZ exports, or a directory of exports.
+# One engine is kept alive across directory files, preserving history.
+safe stream mintsXU4/data/valo_node_01_full_year.csv
+
+# Restrict to one metric and choose a larger drift window.
+safe stream mintsXU4/data/valo_node_01_full_year.csv --metric pm1_0 --window 7200
+
+# Enable the sequential detector only for an appropriately stable signal.
+safe stream data.csv --metric shuntVoltage --page-hinkley
+
+# Create period_*.csv reports and PNG plots.
+safe periods mintsXU4/data/valo_node_01_full_year.csv -o mintsXU4/output
+
+# Generate reports without plots.
+safe periods data.csv -o mintsXU4/output --no-plots
+```
+
+For one-second PM data, use a substantially larger `--window` (the project
+examples use `7200`). At that sampling rate, a short 200-reading window often
+has fewer than three effective independent observations after autocorrelation
+correction, so the statistical window test intentionally remains conservative.
+
+### Python API
+
+```python
+from safe import SensorDrift, replay_csv
+
+def publish_alert(sensor_name, alert, timestamp):
+    print(sensor_name, timestamp, alert)
+
+engine = SensorDrift(on_alert=publish_alert)
+replay_csv("data.csv", engine=engine)
+
+for sensor_name, alert, timestamp in engine.alerts:
+    print(sensor_name, timestamp, alert["alert"])
+```
+
+`on_alert` is a callback, so applications may replace the example function
+with their own logger, database writer, or MQTT publisher without changing
+SAFE's analysis code.
+
+## Period analysis and outputs
+
+`safe periods` filters physically impossible values, then compares consecutive
+non-empty day, week, month, and year buckets for every sensor and metric. It
+also compares the first available month with the last available month. Output
+CSVs include sample counts, effective sample counts, mean and spread changes,
+Cohen's *d*, p-values, and boolean mean/variance drift flags.
+
+Plots are written below `mintsXU4/output/plots/` by default. The standard
+multi-panel report focuses on `pm1_0`, `temperature`, and `pressure`; all
+available metrics remain present in the generated CSV reports.
+
+Treat `mintsXU4/output/` as generated output. Regenerate it from the source
+data and scripts instead of editing its CSVs or images by hand.
+
+## High-resolution and legacy utilities
+
+- [`mintsInfluxDownloader.py`](mintsInfluxDownloader.py) downloads large PM
+  histories from InfluxDB in resumable chunks. It reads credentials from
+  environment variables rather than command-line arguments.
+- [`mintsXU4/mints1sLoader.py`](mintsXU4/mints1sLoader.py) loads the optional
+  gzipped one-second PM archive into a cached wide DataFrame.
+- [`mintsXU4/mintsPmRegen.py`](mintsXU4/mintsPmRegen.py) regenerates
+  PM-specific plots and distribution visualizations from that archive.
+- [`mintsXU4/mintsDriftAnalysis.py`](mintsXU4/mintsDriftAnalysis.py),
+  [`mintsPeriodAnalysis.py`](mintsXU4/mintsPeriodAnalysis.py), and
+  [`mintsPeriodPlotter.py`](mintsXU4/mintsPeriodPlotter.py) are compatibility
+  shims over the maintained `safe` package.
+- The remaining live sensor, serial, and MQTT utilities require the optional
+  sensor dependencies:
+
+  ```bash
+  pip install -e ".[sensor]"
+  ```
+
+See [`scripts.md`](scripts.md) for a fuller one-second-data workflow.
+
 ## Repository layout
 
-- `safe/` — the SAFE package: `engine` (streaming detectors), `stats`
-  (drift-test math), `loader` (InfluxDB CSV handling), `periods` +
-  `plotting` (period-over-period analysis), `cli`.
-- `tests/` — pytest suite for the engine, stats, loader, and period analysis.
-- `mintsXU4/` — MINTS node scripts. `mintsDriftAnalysis.py`,
-  `mintsPeriodAnalysis.py`, and `mintsPeriodPlotter.py` are thin
-  compatibility shims over `safe`; the rest are live-sensor utilities and
-  1-second-data visualization tools.
-- `mintsXU4/data/valo_node_01_full_year.csv` — bundled two-year, 5-minute
-  export from vaLo Node 01 used by the examples above.
-- `mintsXU4/output/` — generated CSVs and plots.
+- [`safe/`](safe/) — maintained package: engine, statistics, loader, period
+  comparisons, plotting, and CLI.
+- [`tests/`](tests/) — tests for the engine, statistics, loader, and reports.
+- [`mintsXU4/`](mintsXU4/) — compatibility shims, legacy live-node tools, and
+  high-resolution PM utilities.
+- [`mintsXU4/data/`](mintsXU4/data/) — bundled five-minute example export;
+  large one-second source files are intentionally ignored by Git.
+- [`mintsXU4/output/`](mintsXU4/output/) — generated analysis artifacts.
