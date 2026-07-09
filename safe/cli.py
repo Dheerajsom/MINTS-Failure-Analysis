@@ -6,7 +6,9 @@
 # ***************************************************************************
 
 import argparse
+import glob
 import logging
+import os
 import sys
 
 from safe.config import DEFAULT_Z_THRESHOLD
@@ -14,10 +16,17 @@ from safe.config import DEFAULT_Z_THRESHOLD
 
 def _add_stream_parser(subparsers):
     p = subparsers.add_parser(
-        "stream", help="Replay an InfluxDB-export CSV through the streaming drift engine")
-    p.add_argument("csv", help="Path to the long-format CSV export")
+        "stream", help="Replay InfluxDB-export CSV(s) through the streaming drift engine")
+    p.add_argument("csv", nargs="+",
+                   help="One or more long-format CSV/CSV.GZ paths, or a directory of them "
+                        "(replayed in sorted order through a single continuous engine)")
+    p.add_argument("--metric", action="append", dest="metrics",
+                   help="Restrict processing to this metric (repeatable, e.g. "
+                        "--metric pm1_0). Default: all metrics present in the file(s)")
     p.add_argument("--window", type=int, default=200,
-                   help="Evaluation window size (default: 200)")
+                   help="Evaluation window size (default: 200). 1s-resolution data is "
+                        "heavily autocorrelated (rho~0.98) — use a much larger window "
+                        "(e.g. 7200) for the windowed Welch/Levene drift test to fire")
     p.add_argument("--z-threshold", type=float, default=DEFAULT_Z_THRESHOLD,
                    help="Modified z-score outlier cutoff (default: %(default)s)")
     p.add_argument("--alpha", type=float, default=0.01,
@@ -28,6 +37,22 @@ def _add_stream_parser(subparsers):
                         "on genuine diurnal weather shifts)")
     p.add_argument("--no-autocorr", action="store_true",
                    help="Disable the autocorrelation (n_eff) correction of test p-values")
+
+
+def _expand_csv_args(paths):
+    """Expand directories into their sorted *.csv / *.csv.gz files."""
+    files = []
+    for path in paths:
+        if os.path.isdir(path):
+            found = sorted(glob.glob(os.path.join(path, "*.csv.gz")) +
+                           glob.glob(os.path.join(path, "*.csv")))
+            if not found:
+                print(f"No .csv/.csv.gz files found in directory: {path}", file=sys.stderr)
+                return None
+            files.extend(found)
+        else:
+            files.append(path)
+    return files
 
 
 def _add_periods_parser(subparsers):
@@ -53,7 +78,11 @@ def main(argv=None):
 
     if args.command == "stream":
         from safe.engine import SensorDrift
-        from safe.loader import replay_csv
+        from safe.loader import replay_csvs
+
+        files = _expand_csv_args(args.csv)
+        if files is None:
+            return 1
 
         engine = SensorDrift(
             window_size=args.window,
@@ -62,10 +91,10 @@ def main(argv=None):
             enable_page_hinkley=args.page_hinkley,
             autocorr_correction=not args.no_autocorr,
         )
-        result = replay_csv(args.csv, engine=engine)
+        result = replay_csvs(files, engine=engine, metrics=args.metrics)
         if result is None:
             return 1
-        print(f"\n{len(engine.alerts)} alert(s) raised.")
+        print(f"\n{len(engine.alerts)} alert(s) raised across {len(files)} file(s).")
         return 0
 
     if args.command == "periods":

@@ -81,8 +81,11 @@ def load_pivoted_dataframe(file_path):
     return pivot_df, metric_cols
 
 
-def replay_csv(file_path, engine=None):
+def replay_csv(file_path, engine=None, metrics=None):
     """Replay a CSV through a SensorDrift engine as if it were streaming.
+
+    `metrics`, if given, restricts processing to that subset of metric columns
+    (e.g. ['pm1_0']) — other fields present in the file are ignored entirely.
 
     Returns the engine (with its .alerts history) or None on load failure.
     """
@@ -95,6 +98,15 @@ def replay_csv(file_path, engine=None):
     pivot_df, metric_cols = load_pivoted_dataframe(file_path)
     if pivot_df is None:
         return None
+
+    if metrics is not None:
+        missing = [m for m in metrics if m not in metric_cols]
+        if missing:
+            logger.warning(f"Requested metric(s) not found in {file_path}: {missing}")
+        metric_cols = [m for m in metric_cols if m in metrics]
+        if not metric_cols:
+            logger.error(f"None of the requested metrics {metrics} are present in {file_path}")
+            return None
 
     # List of dicts is much faster to iterate than iterrows()
     records = pivot_df[['_sensor_name', '_unix_time', '_str_time'] + metric_cols].to_dict(orient='records')
@@ -121,6 +133,28 @@ def replay_csv(file_path, engine=None):
     logger.info("Data processing complete.")
     if error_count:
         logger.warning(f"Skipped {error_count} row(s) due to processing errors.")
+
+    return engine
+
+
+def replay_csvs(file_paths, engine=None, metrics=None):
+    """Replay several CSVs through ONE SensorDrift engine, in order.
+
+    State (buffers, baselines, cooldowns) carries across files, so a run over
+    consecutive day-files behaves like a single continuous stream instead of
+    resetting at each file boundary. Returns the engine, or None if any file
+    fails to load.
+    """
+    from safe.engine import SensorDrift
+
+    if engine is None:
+        engine = SensorDrift()
+
+    for i, file_path in enumerate(file_paths, 1):
+        logger.info(f"[{i}/{len(file_paths)}] {file_path}")
+        result = replay_csv(file_path, engine=engine, metrics=metrics)
+        if result is None:
+            return None
 
     return engine
 
