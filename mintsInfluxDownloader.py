@@ -214,7 +214,7 @@ def detect_start(backend, bucket, device_name, device_id, measurement, fields):
         text = "".join(backend.stream_lines(flux))
     except RuntimeError as e:
         print(f"  (auto start-detect failed, using fallback {FALLBACK_START}): {e}")
-        return _parse_day(FALLBACK_START)
+        return _parse_time(FALLBACK_START)
 
     header = None
     for row in csv.reader(io.StringIO(text)):
@@ -229,14 +229,23 @@ def detect_start(backend, bucket, device_name, device_id, measurement, fields):
             return dt.astimezone(timezone.utc).replace(
                 hour=0, minute=0, second=0, microsecond=0)
     print(f"  (no data found by auto start-detect, using fallback {FALLBACK_START})")
-    return _parse_day(FALLBACK_START)
+    return _parse_time(FALLBACK_START)
 
 
 # ---------------------------------------------------------------------------
 # Time / file helpers
 # ---------------------------------------------------------------------------
-def _parse_day(s):
-    return datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+def _parse_time(s):
+    """Parse an ISO-8601 UTC timestamp or a YYYY-MM-DD UTC date."""
+    try:
+        parsed = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(
+            f"Expected YYYY-MM-DD or an ISO-8601 timestamp, got {s!r}."
+        ) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def iso(dt):
@@ -306,9 +315,9 @@ def main():
                    help="aggregateWindow size, e.g. 1s, 1m.")
 
     p.add_argument("--start", default="auto",
-                   help='Start date YYYY-MM-DD, or "auto" to probe the first point.')
+                   help='Start UTC date/timestamp (YYYY-MM-DD or ISO-8601), or "auto" to probe the first point.')
     p.add_argument("--stop", default=None,
-                   help="Stop date YYYY-MM-DD (exclusive). Defaults to now (UTC).")
+                   help="Exclusive UTC date/timestamp (YYYY-MM-DD or ISO-8601). Defaults to now.")
     p.add_argument("--chunk-days", type=int, default=DEFAULT_CHUNK_DAYS,
                    help="Days of data per request.")
 
@@ -346,8 +355,8 @@ def main():
         start = detect_start(backend, args.bucket, args.device_name,
                              args.device_id, args.measurement, args.fields)
     else:
-        start = _parse_day(args.start)
-    stop = (_parse_day(args.stop) if args.stop
+        start = _parse_time(args.start)
+    stop = (_parse_time(args.stop) if args.stop
             else datetime.now(timezone.utc))
 
     if start >= stop:
