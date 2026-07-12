@@ -70,7 +70,7 @@ from mintsWindRoseAnimation import (
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_WIND_CSV = SCRIPT_DIR / "data" / "valo_node_01_wimda_1s" / "valo_node_01_wimda_last_7d_1s.csv.gz"
 DEFAULT_PM_DIR = SCRIPT_DIR / "data" / "valo_node_01_1s"
-DEFAULT_OUT = SCRIPT_DIR / "output" / "wind" / "pm1_0_wind_rose_sidebyside_last_7d.mp4"
+DEFAULT_OUT = SCRIPT_DIR / "output" / "windrose_videos" / "pm1_0_wind_rose_sidebyside_last_7d.mp4"
 
 WINDOW = pd.Timedelta(hours=1)
 PANEL = "#12403c"  # slightly raised surface for the stats card
@@ -426,7 +426,7 @@ def main() -> None:
     label = field_label(args.field)
     suffix = "" if args.theme == "dark" else f"_{args.theme}"
     out_path = args.out or (
-        SCRIPT_DIR / "output" / "wind" / f"{args.field}_wind_rose_sidebyside_last_7d{suffix}.mp4"
+        SCRIPT_DIR / "output" / "windrose_videos" / f"{args.field}_wind_rose_sidebyside_last_7d{suffix}.mp4"
     )
 
     print(f"Loading wind data from {args.wind_csv} ...")

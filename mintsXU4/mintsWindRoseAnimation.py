@@ -42,7 +42,7 @@ matplotlib.rcParams["animation.ffmpeg_path"] = imageio_ffmpeg.get_ffmpeg_exe()
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CSV = SCRIPT_DIR / "data" / "valo_node_01_wimda_1s" / "valo_node_01_wimda_last_7d_1s.csv.gz"
-DEFAULT_OUT = SCRIPT_DIR / "output" / "wind" / "wimda_last_7d_hourly_wind_rose.mp4"
+DEFAULT_OUT = SCRIPT_DIR / "output" / "windrose_videos" / "wimda_last_7d_hourly_wind_rose.mp4"
 
 DIRECTION_WIDTH = 22.5  # 16-point compass rose
 COMPASS_LABELS = [
