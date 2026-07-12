@@ -47,6 +47,7 @@ from mintsPmWindowAnimation import field_bounds, field_label, pdf_for_window
 
 # Mathtext unit: proper µg/m³ instead of "ug/m^3".
 UNIT_MATH = r"$\mu$g/m$^{3}$"
+import mintsWindRoseAnimation as windrose
 from mintsWindRoseAnimation import (
     ACCENT,
     BASELINE,
@@ -74,6 +75,34 @@ DEFAULT_OUT = SCRIPT_DIR / "output" / "wind" / "pm1_0_wind_rose_sidebyside_last_
 WINDOW = pd.Timedelta(hours=1)
 PANEL = "#12403c"  # slightly raised surface for the stats card
 
+# Clean light theme: white page, near-black ink, deep-teal accent.  The jet
+# speed/PM colors are shared with the dark theme and read fine on white.
+LIGHT_THEME = {
+    "PAGE": "#ffffff",
+    "SURFACE": "#ffffff",
+    "INK_PRIMARY": "#16333d",
+    "INK_SECONDARY": "#3d5c66",
+    "INK_MUTED": "#8aa0a7",
+    "GRIDLINE": "#dde6e9",
+    "BASELINE": "#b7c9ce",
+    "ACCENT": "#0e7c6b",
+    "PANEL": "#f4f8f7",
+}
+
+
+def apply_theme(theme: str) -> None:
+    """Swap the shared palette for the requested theme.
+
+    The wind-rose module reads its colors at draw time from its own globals,
+    so the light palette has to be written both here and there.
+    """
+    if theme == "dark":
+        return
+    for name, value in LIGHT_THEME.items():
+        globals()[name] = value
+        if hasattr(windrose, name):
+            setattr(windrose, name, value)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -95,6 +124,12 @@ def parse_args() -> argparse.Namespace:
              "the 30 fps / 5-step wind-rose video uses, just twice as smooth.",
     )
     parser.add_argument("--speed-unit", default="m/s", help="Label for windSpeedMetersPerSecond.")
+    parser.add_argument(
+        "--theme",
+        choices=("dark", "light"),
+        default="dark",
+        help="Color theme: the original dark teal, or a clean white background.",
+    )
     return parser.parse_args()
 
 
@@ -387,8 +422,12 @@ def make_animation(
 
 def main() -> None:
     args = parse_args()
+    apply_theme(args.theme)
     label = field_label(args.field)
-    out_path = args.out or (SCRIPT_DIR / "output" / "wind" / f"{args.field}_wind_rose_sidebyside_last_7d.mp4")
+    suffix = "" if args.theme == "dark" else f"_{args.theme}"
+    out_path = args.out or (
+        SCRIPT_DIR / "output" / "wind" / f"{args.field}_wind_rose_sidebyside_last_7d{suffix}.mp4"
+    )
 
     print(f"Loading wind data from {args.wind_csv} ...")
     wind = load_wind_data(args.wind_csv)
