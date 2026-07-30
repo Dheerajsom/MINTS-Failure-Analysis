@@ -1,6 +1,6 @@
 # SAFE / MINTS-Failure-Analysis — terminal cheat sheet
 
-Reference for running this repo's **1-second PM data** workflows on a fresh
+Reference for running this repo's **1-second PM/PC data** workflows on a fresh
 machine. All commands assume you're in the repo root unless noted.
 PowerShell is called out separately wherever its syntax differs from bash.
 
@@ -21,10 +21,12 @@ python -m pytest tests/            # sanity check — should be all green (58 te
 
 ## 1. The data
 
-`mintsXU4/data/valo_node_01_1s/` (git-ignored) holds **365+ gzipped daily
-files, PM-only**: 7 IPS7100 size bins — `pm0_1`, `pm0_3`, `pm0_5`, `pm1_0`,
-`pm2_5`, `pm5_0`, `pm10_0`. No temperature/pressure/humidity at this
-resolution.
+`mintsXU4/data/valo_node_01_1s/` (git-ignored) can hold gzipped daily files
+for the seven IPS7100 PM bins and seven corresponding PC bins (`pc0_1` through
+`pc10_0`). Archives downloaded with the downloader's default fields remain
+PM-only; include PC fields with `--fields` when downloading them. PC values
+use the IPS protocol's default `particles/L` unit. No
+temperature/pressure/humidity is included at this resolution.
 
 - Filename pattern: `valo_node_01_YYYYMMDD_YYYYMMDD.csv.gz` (one calendar day each)
 - Size: ~2.9 GB gzipped per year

@@ -11,6 +11,7 @@ Public API:
 """
 
 from safe.config import HARD_BOUNDS
+from safe.animation import FieldMetadata, field_metadata, pdf_axis_upper_limit
 from safe.engine import PageHinkley, SensorDrift
 from safe.loader import load_pivoted_dataframe, replay_csv
 from safe.periods import run_period_analysis
@@ -20,12 +21,15 @@ __version__ = "1.0.0"
 
 __all__ = [
     "HARD_BOUNDS",
+    "FieldMetadata",
     "PageHinkley",
     "SensorDrift",
     "effective_sample_size",
+    "field_metadata",
     "load_pivoted_dataframe",
     "replay_csv",
     "run_period_analysis",
+    "pdf_axis_upper_limit",
     "sample_comparison",
     "__version__",
 ]

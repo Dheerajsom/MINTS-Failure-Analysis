@@ -167,6 +167,29 @@ available metrics remain present in the generated CSV reports.
 Treat `mintsXU4/output/` as generated output. Regenerate it from the source
 data and scripts instead of editing its CSVs or images by hand.
 
+### PM and particle-count animations
+
+The moving-window animation accepts any `pm*` or `pc*` field that is actually
+present in the selected Influx-style CSV or daily `.csv.gz` directory. PM axes
+use `µg/m³`; IPS-7100 PC values use the sensor protocol's default
+`particles/L` unit. For example:
+
+```bash
+# Historical entry point (kept for compatibility)
+python mintsXU4/mintsPmWindowAnimation.py --field pc0_1
+
+# Neutral entry point; explicit output paths still support GIF or HTML
+python mintsXU4/mintsWindowPdfAnimation.py --field pm1_0
+python mintsXU4/mintsWindowPdfAnimation.py --field pc0_1 --out pc0_1_preview.html --max-frames 2
+```
+
+Without `--out`, files retain the established naming scheme under
+`mintsXU4/output/animations/`, such as
+`pm1_0_1h_window_pdf_timeseries.gif` and
+`pc0_1_1h_window_pdf_timeseries.gif`. Use `--data-dir` for the optional daily
+archive; a missing source or absent requested field produces an error listing
+the expected path or available fields.
+
 ## High-resolution and legacy utilities
 
 - [`mintsInfluxDownloader.py`](mintsInfluxDownloader.py) downloads large PM
@@ -176,6 +199,10 @@ data and scripts instead of editing its CSVs or images by hand.
   gzipped one-second PM archive into a cached wide DataFrame.
 - [`mintsXU4/mintsPmRegen.py`](mintsXU4/mintsPmRegen.py) regenerates
   PM-specific plots and distribution visualizations from that archive.
+- [`mintsXU4/mintsWindowPdfAnimation.py`](mintsXU4/mintsWindowPdfAnimation.py)
+  generates PM/PC moving-window PDF animations;
+  [`mintsPmWindowAnimation.py`](mintsXU4/mintsPmWindowAnimation.py) is its
+  backward-compatible historical entry point.
 - [`mintsXU4/mintsDriftAnalysis.py`](mintsXU4/mintsDriftAnalysis.py),
   [`mintsPeriodAnalysis.py`](mintsXU4/mintsPeriodAnalysis.py), and
   [`mintsPeriodPlotter.py`](mintsXU4/mintsPeriodPlotter.py) are compatibility

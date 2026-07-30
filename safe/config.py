@@ -17,6 +17,12 @@ DEFAULT_Z_THRESHOLD = 3.5
 PM_BOUNDS = (0.0, 10000.0)
 PM_METRICS = ('pm0_1', 'pm0_3', 'pm0_5', 'pm1_0', 'pm2_5', 'pm5_0', 'pm10_0')
 
+# IPS7100 differential particle-count bins.  The deployed sensor's count
+# output is particles/liter (the IPS protocol's default unit), with a stated
+# measurement limit of 1,000,000 particles/liter.
+PC_BOUNDS = (0.0, 1_000_000.0)
+PC_METRICS = ('pc0_1', 'pc0_3', 'pc0_5', 'pc1_0', 'pc2_5', 'pc5_0', 'pc10_0')
+
 # Hard physical bounds per metric. Values outside these are impossible for the
 # instrument and are treated as failures, never as data.
 HARD_BOUNDS = {
@@ -25,6 +31,7 @@ HARD_BOUNDS = {
     'pressure':     (300.0, 1200.0),   # hPa
     'shuntVoltage': (-0.320, 0.320),   # INA219 max shunt voltage range (V)
     **{pm: PM_BOUNDS for pm in PM_METRICS},
+    **{pc: PC_BOUNDS for pc in PC_METRICS},
 }
 
 # --------------------------------------------------------------------------
