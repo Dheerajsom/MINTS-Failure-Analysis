@@ -14,7 +14,6 @@
 
 import glob
 import os
-import traceback
 
 import numpy as np
 import pandas as pd
@@ -23,6 +22,7 @@ import matplotlib
 matplotlib.use("Agg")  # headless / file-only backend
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+from safe.stats import validate_alpha
 
 # A clean, report-friendly base style (fall back gracefully on older matplotlib)
 try:
@@ -111,11 +111,13 @@ def _real_data_blocks(d, max_gap_days=45, min_std=0.05):
 
 
 def _finish(fig, path, suptitle):
-    fig.suptitle(suptitle, fontsize=13, fontweight="bold")
-    fig.tight_layout(rect=[0, 0, 1, 0.97])
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    fig.savefig(path, bbox_inches="tight")
-    plt.close(fig)
+    try:
+        fig.suptitle(suptitle, fontsize=13, fontweight="bold")
+        fig.tight_layout(rect=[0, 0, 1, 0.97])
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        fig.savefig(path, bbox_inches="tight")
+    finally:
+        plt.close(fig)
     print(f"  -> {os.path.basename(path)}")
 
 
@@ -178,8 +180,9 @@ def _dense_metric_panels(df, suptitle, out_path, kind):
     _finish(fig, out_path, suptitle)
 
 
-def _dense_significance(df, suptitle, out_path):
+def _dense_significance(df, suptitle, out_path, p_alpha=ALPHA):
     """3 stacked panels of -log10(p) vs time for Welch (mean) & Levene (variance)."""
+    log_alpha = -np.log10(p_alpha)
     fig, axes = plt.subplots(3, 1, figsize=(11, 9), sharex=True)
 
     for ax, metric in zip(axes, METRICS):
@@ -199,9 +202,9 @@ def _dense_significance(df, suptitle, out_path):
         var_sig = _as_bool(d["variance_shift"])
 
         # Shade the "not significant" band (below the alpha threshold)
-        ax.axhspan(0, LOG_ALPHA, color="gray", alpha=0.12, linewidth=0)
-        ax.axhline(LOG_ALPHA, color="#d62728", linestyle="--", linewidth=1.0, alpha=0.7,
-                   label=f"α = {ALPHA} threshold")
+        ax.axhspan(0, log_alpha, color="gray", alpha=0.12, linewidth=0)
+        ax.axhline(log_alpha, color="#d62728", linestyle="--", linewidth=1.0, alpha=0.7,
+                   label=f"α = {p_alpha} threshold")
 
         ax.plot(dates, lw, color=info["color"], linewidth=1.3, alpha=0.9, label="Welch  (mean shift)")
         ax.plot(dates, ll, color=LEVENE_COLOR, linewidth=1.1, alpha=0.75, label="Levene (variance shift)")
@@ -225,7 +228,8 @@ def _dense_significance(df, suptitle, out_path):
     _finish(fig, out_path, suptitle)
 
 
-def _zoomed_metric_significance(df, metric, start, end, block_num, plots_dir):
+def _zoomed_metric_significance(df, metric, start, end, block_num, plots_dir, p_alpha=ALPHA):
+    log_alpha = -np.log10(p_alpha)
     info = _info(metric)
     d = _metric_rows(df, metric)
     window = d[(d["parsed_date"] >= start) & (d["parsed_date"] <= end)].copy()
@@ -239,9 +243,9 @@ def _zoomed_metric_significance(df, metric, start, end, block_num, plots_dir):
     var_sig = _as_bool(window["variance_shift"])
 
     fig, ax = plt.subplots(figsize=(10.5, 4.8))
-    ax.axhspan(0, LOG_ALPHA, color="gray", alpha=0.12, linewidth=0)
-    ax.axhline(LOG_ALPHA, color="#d62728", linestyle="--", linewidth=1.0, alpha=0.7,
-               label=f"alpha = {ALPHA} threshold")
+    ax.axhspan(0, log_alpha, color="gray", alpha=0.12, linewidth=0)
+    ax.axhline(log_alpha, color="#d62728", linestyle="--", linewidth=1.0, alpha=0.7,
+               label=f"alpha = {p_alpha} threshold")
 
     use_markers = len(window) <= 45
     mk = dict(marker="o", markersize=4) if use_markers else {}
@@ -255,7 +259,7 @@ def _zoomed_metric_significance(df, metric, start, end, block_num, plots_dir):
         ax.scatter(dates[~var_sig], ll[~var_sig], facecolors="none", edgecolors=LEVENE_COLOR,
                    s=42, linewidths=1.3, zorder=5, label="variance: not significant")
 
-    y_max = min(max(float(np.nanmax([lw.max(), ll.max(), LOG_ALPHA])) + 1.0, LOG_ALPHA + 1.0), P_FLOOR_LOG + 1)
+    y_max = min(max(float(np.nanmax([lw.max(), ll.max(), log_alpha])) + 1.0, log_alpha + 1.0), P_FLOOR_LOG + 1)
     ax.set_ylim(-0.2, y_max)
     ax.set_xlim(start, end)
     ax.set_ylabel("-log10(p)\n(higher = stronger)")
@@ -269,7 +273,7 @@ def _zoomed_metric_significance(df, metric, start, end, block_num, plots_dir):
     _finish(fig, os.path.join(plots_dir, filename), f"Day To Day: {info['name']} Test Significance Zoom")
 
 
-def generate_day_to_day_zoomed_significance(csv_path, plots_dir, metrics=("temperature", "pressure")):
+def generate_day_to_day_zoomed_significance(csv_path, plots_dir, metrics=("temperature", "pressure"), p_alpha=ALPHA):
     df = pd.read_csv(csv_path)
     if df.empty:
         return
@@ -279,7 +283,7 @@ def generate_day_to_day_zoomed_significance(csv_path, plots_dir, metrics=("tempe
         d = _metric_rows(df, metric)
         blocks = _real_data_blocks(d)
         for block_num, (start, end) in enumerate(blocks, 1):
-            _zoomed_metric_significance(df, metric, start, end, block_num, plots_dir)
+            _zoomed_metric_significance(df, metric, start, end, block_num, plots_dir, p_alpha)
 
 
 # --------------------------------------------------------------------------
@@ -336,7 +340,8 @@ def _sparse_metric_panels(df, suptitle, out_path, kind):
     _finish(fig, out_path, suptitle)
 
 
-def _sparse_significance(df, suptitle, out_path):
+def _sparse_significance(df, suptitle, out_path, p_alpha=ALPHA):
+    log_alpha = -np.log10(p_alpha)
     fig, axes = plt.subplots(3, 1, figsize=(9, 9))
 
     for ax, metric in zip(axes, METRICS):
@@ -353,7 +358,7 @@ def _sparse_significance(df, suptitle, out_path):
         w = 0.38
         ax.bar(x - w / 2, _neg_log10p(d["p_welch"]), w, color=info["color"], alpha=0.9, edgecolor="black", label="Welch (mean)")
         ax.bar(x + w / 2, _neg_log10p(d["p_levene"]), w, color=LEVENE_COLOR, alpha=0.8, edgecolor="black", label="Levene (variance)")
-        ax.axhline(LOG_ALPHA, color="#d62728", linestyle="--", linewidth=1.0, alpha=0.7, label=f"α = {ALPHA}")
+        ax.axhline(log_alpha, color="#d62728", linestyle="--", linewidth=1.0, alpha=0.7, label=f"α = {p_alpha}")
 
         ax.set_ylim(0, P_FLOOR_LOG + 1)
         ax.set_ylabel("-log10(p)")
@@ -368,42 +373,36 @@ def _sparse_significance(df, suptitle, out_path):
 # --------------------------------------------------------------------------
 # orchestration
 # --------------------------------------------------------------------------
-def generate_category_plots(csv_path, plots_dir):
-    filename = os.path.basename(csv_path)
-    category = filename.replace("period_", "").replace(".csv", "")
+def generate_category_plots(csv_path, plots_dir, p_alpha=ALPHA):
+    """Render each sensor independently; propagate failures to the caller."""
+    validate_alpha(p_alpha)
+    category = os.path.basename(csv_path).removeprefix("period_").removesuffix(".csv")
     pretty = category.replace("_", " ").title()
-    print(f"Processing {pretty} ({filename})")
-
-    try:
-        df = pd.read_csv(csv_path)
-        if df.empty:
-            print(f"  [skip] {filename} is empty")
-            return
-
-        # Parse period dates once here; every panel reuses this column
-        df["parsed_date"] = pd.to_datetime(df["new_period"], errors="coerce")
-
-        is_dense = df["new_period"].nunique() >= 3
+    df = pd.read_csv(csv_path)
+    if df.empty:
+        return
+    df["parsed_date"] = pd.to_datetime(df["new_period"], errors="raise")
+    groups = list(df.groupby("sensor", sort=True))
+    for number, (sensor, frame) in enumerate(groups, 1):
+        # Numeric directories cannot collide or escape via a sensor identifier.
+        destination = plots_dir if len(groups) == 1 else os.path.join(plots_dir, f"sensor_{number}")
+        title = f"{pretty}: {sensor}"
+        is_dense = frame["new_period"].nunique() >= 3
         metric_panels = _dense_metric_panels if is_dense else _sparse_metric_panels
         significance = _dense_significance if is_dense else _sparse_significance
-
-        metric_panels(df, f"{pretty}: Metric Means Over Time", os.path.join(plots_dir, f"{category}_means.png"), "mean")
-        metric_panels(df, f"{pretty}: Volatility (Std Dev) Over Time", os.path.join(plots_dir, f"{category}_stds.png"), "std")
-        metric_panels(df, f"{pretty}: Standardized Mean (Z-Score)", os.path.join(plots_dir, f"{category}_zscores.png"), "zscore")
-        significance(df, f"{pretty}: Test Significance vs Time (α = {ALPHA})", os.path.join(plots_dir, f"{category}_stats_tests.png"))
-
+        for kind, suffix, label in (("mean", "means", "Metric Means"),
+                                    ("std", "stds", "Standard Deviations"),
+                                    ("zscore", "zscores", "Standardized Period Means")):
+            metric_panels(frame, f"{title}: {label}", os.path.join(destination, f"{category}_{suffix}.png"), kind)
+        significance(frame, f"{title}: Test Significance (alpha = {p_alpha})",
+                     os.path.join(destination, f"{category}_stats_tests.png"), p_alpha)
         if category == "day_to_day":
-            generate_day_to_day_zoomed_significance(csv_path, plots_dir)
-
-        print(f"  done ({'time-series' if is_dense else 'bar'} layout)")
-        print("-" * 50)
-
-    except Exception as e:
-        print(f"Error plotting {pretty}: {e}")
-        traceback.print_exc()
+            for metric in ("temperature", "pressure"):
+                for block, (first, last) in enumerate(_real_data_blocks(_metric_rows(frame, metric)), 1):
+                    _zoomed_metric_significance(frame, metric, first, last, block, destination, p_alpha)
 
 
-def run_all_plotting(output_dir, plots_dir):
+def run_all_plotting(output_dir, plots_dir, p_alpha=ALPHA):
     """Scan output_dir for period_*.csv files and render plots into plots_dir."""
     os.makedirs(plots_dir, exist_ok=True)
     print(f"Output Directory: {output_dir}")
@@ -416,6 +415,6 @@ def run_all_plotting(output_dir, plots_dir):
 
     print(f"Found {len(csv_files)} category files to plot.\n")
     for csv_file in csv_files:
-        generate_category_plots(csv_file, plots_dir)
+        generate_category_plots(csv_file, plots_dir, p_alpha)
 
     print("\nAll plotting complete. Images saved in", plots_dir)

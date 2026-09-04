@@ -9,8 +9,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
-CSV_PATH = Path("mintsXU4/data/valo_node_01_full_year.csv")
-OUT_DIR = Path("mintsXU4/output")
+from safe.loader import load_pivoted_dataframe
+from safe.periods import apply_hard_bounds
+
+CSV_PATH = Path(__file__).resolve().parent / "mintsXU4/data/valo_node_01_full_year.csv"
+OUT_DIR = Path(__file__).resolve().parent / "mintsXU4/output"
 
 FIELDS = [
     {"field": "pm1_0", "unit": "ug/m^3", "slug": "pm1_0", "label": "PM1.0"},
@@ -30,16 +33,16 @@ COMPARISONS = [
         "name": "Last 2 Weeks",
         "slug": "last2weeks",
         "samples": [
-            ("Week 1 (2026-05-14 to 2026-05-21)", "2026-05-14", "2026-05-21", "steelblue"),
-            ("Week 2 (2026-05-21 to 2026-05-28)", "2026-05-21", "2026-05-28", "darkorange"),
+            ("Week 1 (2026-05-14 to 2026-05-20)", "2026-05-14", "2026-05-20", "steelblue"),
+            ("Week 2 (2026-05-21 to 2026-05-27)", "2026-05-21", "2026-05-27", "darkorange"),
         ],
     },
     {
         "name": "Last 2 Months",
         "slug": "last2months",
         "samples": [
-            ("Month 1 (2026-03-28 to 2026-04-28)", "2026-03-28", "2026-04-28", "steelblue"),
-            ("Month 2 (2026-04-28 to 2026-05-28)", "2026-04-28", "2026-05-28", "darkorange"),
+            ("Month 1 (2026-03-28 to 2026-04-27)", "2026-03-28", "2026-04-27", "steelblue"),
+            ("Month 2 (2026-04-28 to 2026-05-27)", "2026-04-28", "2026-05-27", "darkorange"),
         ],
     },
     {
@@ -71,8 +74,11 @@ def zscore(values):
 
 def normal_test_rows(field_label, comparison_name, sample_name, values):
     z = zscore(values)
-    ks_stat, ks_p = st.kstest(z, "norm")
-    normal_stat, normal_p = st.normaltest(values)
+    ks_stat = st.kstest(z, "norm").statistic
+    if len(values) >= 8 and np.std(values) > 1e-12:
+        normal_stat, normal_p = st.normaltest(values)
+    else:
+        normal_stat, normal_p = np.nan, np.nan
     return [
         {
             "field": field_label,
@@ -80,7 +86,7 @@ def normal_test_rows(field_label, comparison_name, sample_name, values):
             "sample": sample_name,
             "test": "One-sample KS vs standard normal after z-scoring",
             "statistic": round(float(ks_stat), 6),
-            "p_value": round(float(ks_p), 6),
+            "p_value": None,  # fitted mean/std invalidate the ordinary KS null distribution
             "n": len(values),
             "mean": round(float(np.mean(values)), 6),
             "std": round(float(np.std(values, ddof=0)), 6),
@@ -91,7 +97,7 @@ def normal_test_rows(field_label, comparison_name, sample_name, values):
             "sample": sample_name,
             "test": "D'Agostino-Pearson normality test",
             "statistic": round(float(normal_stat), 6),
-            "p_value": round(float(normal_p), 6),
+            "p_value": float(normal_p) if np.isfinite(normal_p) else None,
             "n": len(values),
             "mean": round(float(np.mean(values)), 6),
             "std": round(float(np.std(values, ddof=0)), 6),
@@ -133,8 +139,12 @@ def plot_standard_normal_comparison(field_label, comparison, period_samples, his
 
 
 def main():
-    raw = pd.read_csv(CSV_PATH, comment="#")
-    raw["_time"] = pd.to_datetime(raw["_time"], utc=True)
+    raw, metrics = load_pivoted_dataframe(CSV_PATH)
+    if raw is None:
+        return 1
+    if raw["_sensor_name"].nunique() != 1:
+        raise ValueError("Distribution visualizer requires a single sensor export")
+    raw = apply_hard_bounds(raw, metrics)
 
     for fdef in FIELDS:
         field = fdef["field"]
@@ -142,10 +152,9 @@ def main():
         field_label = fdef["label"]
         hist_dir, stats_dir = field_dirs(field_slug)
 
-        df = raw[raw["_field"] == field].copy()
-        df = df.set_index("_time").sort_index()
-        df["_value"] = pd.to_numeric(df["_value"], errors="coerce")
-        df = df.dropna(subset=["_value"])
+        if field not in metrics:
+            continue
+        df = raw[[field]].rename(columns={field: "_value"}).dropna()
 
         all_rows = []
         for comparison in COMPARISONS:
@@ -176,4 +185,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

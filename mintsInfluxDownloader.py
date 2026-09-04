@@ -39,6 +39,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -148,17 +149,22 @@ class Backend:
         env["INFLUX_ORG"] = self.org
         cmd = [self.influx_bin, "query", flux, "--raw",
                "--host", self.host, "--org", self.org]
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, env=env,
-                                text=True, bufsize=1)
-        for line in proc.stdout:
-            yield line
-        proc.stdout.close()
-        err = proc.stderr.read()
-        proc.stderr.close()
-        rc = proc.wait()
-        if rc != 0:
-            raise RuntimeError(f"influx query failed (exit {rc}):\n{err.strip()}")
+        # Drain stderr to disk while stdout is streamed; two PIPEs can deadlock
+        # when the child fills stderr before closing stdout.
+        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as errors:
+            with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=errors,
+                                  env=env, text=True, encoding="utf-8", bufsize=1) as proc:
+                try:
+                    yield from proc.stdout
+                    proc.wait()
+                finally:
+                    proc.stdout.close()
+                    if proc.poll() is None:
+                        proc.terminate()
+                rc = proc.wait()
+            if rc != 0:
+                errors.seek(0)
+                raise RuntimeError(f"influx query failed (exit {rc}):\n{errors.read().strip()}")
 
 
 def resolve_influx_bin(explicit):
@@ -217,6 +223,7 @@ def detect_start(backend, bucket, device_name, device_id, measurement, fields):
         return _parse_time(FALLBACK_START)
 
     header = None
+    timestamps = []
     for row in csv.reader(io.StringIO(text)):
         if not row or row[0].startswith("#"):
             continue
@@ -226,8 +233,9 @@ def detect_start(backend, bucket, device_name, device_id, measurement, fields):
         if header:
             t = row[header.index("_time")]
             dt = datetime.fromisoformat(t.replace("Z", "+00:00"))
-            return dt.astimezone(timezone.utc).replace(
-                hour=0, minute=0, second=0, microsecond=0)
+            timestamps.append(dt.astimezone(timezone.utc))
+    if timestamps:
+        return min(timestamps).replace(hour=0, minute=0, second=0, microsecond=0)
     print(f"  (no data found by auto start-detect, using fallback {FALLBACK_START})")
     return _parse_time(FALLBACK_START)
 
@@ -337,6 +345,9 @@ def main():
                    help="Retries per chunk before giving up.")
 
     args = p.parse_args()
+    for option in ("chunk_days", "retries", "timeout"):
+        if getattr(args, option) < 1:
+            p.error(f"--{option.replace('_', '-')} must be positive")
 
     if not args.host:
         sys.exit("ERROR: no InfluxDB host. Set INFLUX_HOST or pass --host.")

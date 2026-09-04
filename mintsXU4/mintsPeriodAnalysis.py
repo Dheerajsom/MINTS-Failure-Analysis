@@ -33,4 +33,4 @@ if __name__ == "__main__":
     output_dir = os.path.join(script_dir, "output")
 
     print(f"Resolved Data File Path: {data_file}")
-    run_period_analysis(data_file, output_dir)
+    sys.exit(0 if run_period_analysis(data_file, output_dir) else 1)

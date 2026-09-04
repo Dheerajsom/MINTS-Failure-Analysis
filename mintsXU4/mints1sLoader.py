@@ -16,6 +16,8 @@ import logging
 import numpy as np
 import pandas as pd
 
+from safe.config import PM_BOUNDS
+
 logger = logging.getLogger(__name__)
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "valo_node_01_1s")
@@ -38,6 +40,8 @@ def load_wide(use_cache=True, max_files=None, rebuild=False):
     max_files : limit to the first N daily files (for quick tests; bypasses cache).
     rebuild   : force a rebuild even if the cache exists.
     """
+    if max_files is not None and (isinstance(max_files, bool) or not isinstance(max_files, int) or max_files < 1):
+        raise ValueError("max_files must be a positive integer")
     cacheable = use_cache and max_files is None
 
     if cacheable and not rebuild and os.path.exists(CACHE_PATH):
@@ -53,23 +57,25 @@ def load_wide(use_cache=True, max_files=None, rebuild=False):
     logger.info("Building wide PM frame from %d daily files...", len(files))
     blocks = []
     for i, f in enumerate(files, 1):
-        df = pd.read_csv(f, compression="gzip", usecols=["_time", "_value", "_field"])
+        df = pd.read_csv(f, compression="gzip", comment="#", usecols=["_time", "_value", "_field"])
         df["_value"] = pd.to_numeric(df["_value"], errors="coerce")
         df = df[df["_field"].isin(PM_FIELDS)]
+        df["_time"] = pd.to_datetime(df["_time"], format="ISO8601", utc=True, errors="coerce")
+        df = df.dropna(subset=["_time", "_value"])
         # Pivot this single day (cheap); duplicate timestamps collapsed via 'first'.
         block = df.pivot_table(index="_time", columns="_field", values="_value", aggfunc="first")
-        blocks.append(block)
+        blocks.append(block.astype("float32"))
         if i % 30 == 0 or i == len(files):
             logger.info("  read %d/%d files", i, len(files))
 
     wide = pd.concat(blocks)
     wide.index = pd.to_datetime(wide.index, utc=True).tz_convert(None)
-    wide = wide.sort_index()
+    wide = wide[~wide.index.duplicated(keep="first")].sort_index()
     wide = wide.reindex(columns=PM_FIELDS)
 
     # PM is a non-negative mass concentration; treat negatives as bad readings.
     for c in wide.columns:
-        wide.loc[wide[c] < 0, c] = np.nan
+        wide.loc[~np.isfinite(wide[c]) | (wide[c] < PM_BOUNDS[0]) | (wide[c] > PM_BOUNDS[1]), c] = np.nan
         wide[c] = wide[c].astype("float32")
 
     wide.index.name = "_dt"

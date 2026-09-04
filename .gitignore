@@ -21,3 +21,8 @@ __pycache__/
 .pytest_cache/
 build/
 dist/
+
+# Local environments and credentials
+.venv/
+mintsXU4/credentials/
+mintsXU4/credentials.yml

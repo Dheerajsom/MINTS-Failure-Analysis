@@ -1,11 +1,16 @@
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import scipy.stats as st
 from pathlib import Path
 
-CSV_PATH = "mintsXU4/data/valo_node_01_full_year.csv"
-OUT_DIR  = Path("mintsXU4/output")
+from safe.loader import load_pivoted_dataframe
+from safe.periods import apply_hard_bounds
+
+CSV_PATH = Path(__file__).resolve().parent / "mintsXU4/data/valo_node_01_full_year.csv"
+OUT_DIR = Path(__file__).resolve().parent / "mintsXU4/output"
 
 # Field-specific output dirs — created per-field below
 def field_dirs(slug):
@@ -36,6 +41,9 @@ COLORS = ["steelblue", "darkorange"]
 
 
 def best_fit(data):
+    data = np.asarray(data, dtype=float)
+    if data.size < 2 or not np.isfinite(data).all() or data.std() < 1e-12:
+        return []
     results = []
     for name, dist in CANDIDATES:
         try:
@@ -51,10 +59,12 @@ def overlay_histogram(ax, s1, s2, label1, label2, title, xlabel):
     for i, (data, color, label) in enumerate(zip([s1, s2], COLORS, [label1, label2])):
         _, bins, _ = ax.hist(data, bins="auto", color=color, edgecolor="white",
                              linewidth=0.4, alpha=0.4, density=True, label=label)
-        ks, _, name, dist, params = best_fit(data)[0]
-        x = np.linspace(bins[0], bins[-1], 600)
-        ax.plot(x, dist.pdf(x, *params), color=color, linewidth=2, alpha=1.0,
-                label=f"Period {i+1} best fit: {name} (KS={ks:.4f})")
+        fits = best_fit(data)
+        if fits:
+            ks, _, name, dist, params = fits[0]
+            x = np.linspace(bins[0], bins[-1], 600)
+            ax.plot(x, dist.pdf(x, *params), color=color, linewidth=2,
+                    label=f"Period {i+1} best fit: {name} (KS={ks:.4f})")
     ax.set_xlabel(xlabel, fontsize=11)
     ax.set_ylabel("Density", fontsize=11)
     ax.set_title(title, fontsize=13, fontweight="bold")
@@ -158,90 +168,98 @@ def write_md(field_label, unit, period_label, label1, label2, n1, n2, test_resul
     ] + conclusions + [
         "",
         "> **Note:** All four tests are non-parametric — they make no assumption about the "
-        "underlying distribution shape.",
+        "underlying distribution shape. These are exploratory, nominal p-values: "
+        "serial correlation and multiple comparisons are not corrected; they are not SAFE drift flags.",
     ]
 
-    filepath.write_text("\n".join(lines))
+    filepath.write_text("\n".join(lines), encoding="utf-8")
     print(f"  Saved {filepath.name}")
 
 
-# ── Load raw CSV once ─────────────────────────────────────────────────────────
-raw = pd.read_csv(CSV_PATH, comment="#")
-raw["_time"] = pd.to_datetime(raw["_time"], utc=True)
+def main():
+    raw, metrics = load_pivoted_dataframe(CSV_PATH)
+    if raw is None:
+        return 1
+    if raw['_sensor_name'].nunique() != 1:
+        raise ValueError("Distribution visualizer requires a single sensor export")
+    raw = apply_hard_bounds(raw, metrics)
+    all_csv_rows = []
 
-all_csv_rows = []
+    for fdef in FIELDS:
+        field       = fdef["field"]
+        unit        = fdef["unit"]
+        slug        = fdef["slug"]
+        field_label = fdef["label"]
 
-for fdef in FIELDS:
-    field       = fdef["field"]
-    unit        = fdef["unit"]
-    slug        = fdef["slug"]
-    field_label = fdef["label"]
+        hist_dir, stats_dir = field_dirs(slug)
 
-    hist_dir, stats_dir = field_dirs(slug)
+        if field not in metrics:
+            continue
+        df = raw[[field]].rename(columns={field: "_value"}).dropna()
 
-    df = raw[raw["_field"] == field].copy()
-    df = df.set_index("_time").sort_index()
-    df["_value"] = pd.to_numeric(df["_value"], errors="coerce")
-    df = df.dropna(subset=["_value"])
+        may_2025 = df.loc["2025-05-01":"2025-05-31", "_value"]
+        may_2026 = df.loc["2026-05-01":"2026-05-31", "_value"]
 
-    may_2025 = df.loc["2025-05-01":"2025-05-31", "_value"]
-    may_2026 = df.loc["2026-05-01":"2026-05-31", "_value"]
+        label1 = "May 2025 (2025-05-01 – 2025-05-31)"
+        label2 = "May 2026 (2026-05-01 – 2026-05-31)"
 
-    label1 = "May 2025 (2025-05-01 – 2025-05-31)"
-    label2 = "May 2026 (2026-05-01 – 2026-05-31)"
+        print(f"\n{'='*60}")
+        print(f"  {field_label}  |  May 2025 vs May 2026")
+        print(f"  May 2025: {len(may_2025)} pts  |  May 2026: {len(may_2026)} pts")
+        print(f"{'='*60}")
 
-    print(f"\n{'='*60}")
-    print(f"  {field_label}  |  May 2025 vs May 2026")
-    print(f"  May 2025: {len(may_2025)} pts  |  May 2026: {len(may_2026)} pts")
-    print(f"{'='*60}")
+        if len(may_2025) == 0 or len(may_2026) == 0:
+            print("  WARNING: one period has no data — skipping.")
+            continue
 
-    if len(may_2025) == 0 or len(may_2026) == 0:
-        print("  WARNING: one period has no data — skipping.")
-        continue
+        # Plot
+        fig, ax = plt.subplots(figsize=(11, 6))
+        overlay_histogram(
+            ax, may_2025, may_2026, label1, label2,
+            f"{field_label} Distribution — May 2025 vs May 2026 (vaLo Node 01)",
+            f"{field_label} ({unit})",
+        )
+        plt.tight_layout()
+        png_path = hist_dir / f"{slug}_may2025_vs_may2026_histogram.png"
+        plt.savefig(png_path, dpi=150)
+        plt.close()
+        print(f"  Plot saved → {png_path}")
 
-    # Plot
-    fig, ax = plt.subplots(figsize=(11, 6))
-    overlay_histogram(
-        ax, may_2025, may_2026, label1, label2,
-        f"{field_label} Distribution — May 2025 vs May 2026 (vaLo Node 01)",
-        f"{field_label} ({unit})",
-    )
-    plt.tight_layout()
-    png_path = hist_dir / f"{slug}_may2025_vs_may2026_histogram.png"
-    plt.savefig(png_path, dpi=150)
-    plt.close()
-    print(f"  Plot saved → {png_path}")
+        # Tests
+        tr = run_nonparametric_tests(may_2025.values, may_2026.values)
 
-    # Tests
-    tr = run_nonparametric_tests(may_2025.values, may_2026.values)
+        for test_name, res in tr.items():
+            stat = res.get("statistic")
+            pval = res.get("p_value")
+            sig  = (pval is not None) and (pval < 0.05)
+            all_csv_rows.append({
+                "field":        field_label,
+                "period":       "May 2025 vs May 2026",
+                "period_1":     label1,
+                "period_2":     label2,
+                "n1":           len(may_2025),
+                "n2":           len(may_2026),
+                "test":         test_name,
+                "statistic":    stat,
+                "p_value":      pval,
+                "significant":  sig,
+                "significance": sig_label(pval),
+            })
+            print(f"  {test_name:<4}  stat={stat}  {sig_label(pval)}")
 
-    for test_name, res in tr.items():
-        stat = res.get("statistic")
-        pval = res.get("p_value")
-        sig  = (pval is not None) and (pval < 0.05)
-        all_csv_rows.append({
-            "field":        field_label,
-            "period":       "May 2025 vs May 2026",
-            "period_1":     label1,
-            "period_2":     label2,
-            "n1":           len(may_2025),
-            "n2":           len(may_2026),
-            "test":         test_name,
-            "statistic":    stat,
-            "p_value":      pval,
-            "significant":  sig,
-            "significance": sig_label(pval),
-        })
-        print(f"  {test_name:<4}  stat={stat}  {sig_label(pval)}")
+        # MD + per-field CSV
+        write_md(
+            field_label, unit, "May 2025 vs May 2026",
+            label1, label2, len(may_2025), len(may_2026), tr,
+            stats_dir / f"{slug}_may2025_vs_may2026_results.md",
+        )
+        csv_field = stats_dir / f"{slug}_may2025_vs_may2026_results.csv"
+        pd.DataFrame([r for r in all_csv_rows if r["field"] == field_label]).to_csv(csv_field, index=False)
+        print(f"  CSV  saved → {csv_field}")
 
-    # MD + per-field CSV
-    write_md(
-        field_label, unit, "May 2025 vs May 2026",
-        label1, label2, len(may_2025), len(may_2026), tr,
-        stats_dir / f"{slug}_may2025_vs_may2026_results.md",
-    )
-    csv_field = stats_dir / f"{slug}_may2025_vs_may2026_results.csv"
-    pd.DataFrame([r for r in all_csv_rows if r["field"] == field_label]).to_csv(csv_field, index=False)
-    print(f"  CSV  saved → {csv_field}")
+    print("\nDone.")
+    return 0
 
-print("\nDone.")
+
+if __name__ == "__main__":
+    raise SystemExit(main())

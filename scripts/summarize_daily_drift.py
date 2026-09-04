@@ -21,8 +21,6 @@ import pandas as pd
 from safe.engine import SensorDrift
 from safe.loader import replay_csv
 
-logging.getLogger("safe").setLevel(logging.ERROR)  # silence per-row loader logs
-
 VARIANT_KWARGS = {
     "default": dict(autocorr_correction=True, enable_page_hinkley=False),
     "no-autocorr": dict(autocorr_correction=False, enable_page_hinkley=False),
@@ -60,6 +58,8 @@ def main(argv=None):
                         help="Where to write the per-day/variant CSV (default: %(default)s)")
     args = parser.parse_args(argv)
 
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit must be positive")
     variants = args.variant or ["default"]
 
     files = sorted(glob.glob(os.path.join(args.data_dir, args.pattern)))
@@ -70,6 +70,7 @@ def main(argv=None):
         return 1
 
     rows = []
+    failures = 0
     for i, file_path in enumerate(files, 1):
         day = _day_label(file_path)
         for variant in variants:
@@ -78,6 +79,7 @@ def main(argv=None):
             elapsed = time.time() - t0
             if counts is None:
                 print(f"[{i}/{len(files)}] {day} ({variant}): FAILED to load")
+                failures += 1
                 continue
             total = sum(counts.values())
             print(f"[{i}/{len(files)}] {day} ({variant}): {total} alert(s) in {elapsed:.1f}s "
@@ -86,6 +88,8 @@ def main(argv=None):
             row.update(counts)
             rows.append(row)
 
+    if not rows:
+        return 1
     df = pd.DataFrame(rows).fillna(0)
     out_dir = os.path.dirname(args.output)
     if out_dir:
@@ -96,7 +100,7 @@ def main(argv=None):
     print("\n=== Summary (mean alerts/day by variant) ===")
     print(df.groupby("variant")["total_alerts"].agg(["mean", "min", "max", "count"]))
 
-    return 0
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

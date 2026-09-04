@@ -18,7 +18,6 @@
 
 import os
 import sys
-import shutil
 import logging
 from pathlib import Path
 
@@ -352,7 +351,7 @@ def histograms_for_field(field, wide, hist_dir):
     for comp in _windows(wide):
         samples = []
         for sample_name, a, b in comp["samples"]:
-            vals = series.loc[str(a):str(b)].to_numpy(dtype=float)
+            vals = series.loc[a:b + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)].to_numpy(dtype=float)
             if vals.size == 0:
                 logger.warning("  %s %s: no data in %s..%s", field, comp["slug"], a, b)
                 continue
@@ -377,34 +376,8 @@ def histograms_for_field(field, wide, hist_dir):
                                         period_samples, Path(hist_dir), field)
 
 
-# --------------------------------------------------------------------------
-# Cleanup of old PM1.0-only outputs + period CSV snapshots
-# --------------------------------------------------------------------------
-def cleanup_old():
-    removed = []
-    old_pm = os.path.join(OUT_DIR, "pm1_0")
-    if os.path.isdir(old_pm):
-        shutil.rmtree(old_pm)
-        removed.append(os.path.relpath(old_pm, SCRIPT_DIR))
-    # Old period CSV snapshots (user does not want CSV deliverables)
-    pa = os.path.join(OUT_DIR, "period_analysis")
-    if os.path.isdir(pa):
-        for fn in os.listdir(pa):
-            if fn.startswith("period_") and fn.endswith(".csv"):
-                os.remove(os.path.join(pa, fn))
-                removed.append(os.path.relpath(os.path.join(pa, fn), SCRIPT_DIR))
-    return removed
-
-
-# --------------------------------------------------------------------------
 def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-
-    # Remove old PM1.0-only images + CSV snapshots first, so regenerating into
-    # output/pm1_0/ does not get clobbered. (These are git-tracked, so a `git
-    # checkout` restores them if needed.)
-    for r in cleanup_old():
-        logger.info("removed old output: %s", r)
 
     wide = loader.load_wide()
     logger.info("Loaded wide PM frame %s  range %s -> %s",

@@ -2,7 +2,7 @@
 # analysis dependencies for environments that expect a requirements.txt.
 numpy
 scipy
-pandas
+pandas>=2.0
 matplotlib
 
 # Optional extras (installed via `pip install -e ".[sensor]"` / ".[dev]"):

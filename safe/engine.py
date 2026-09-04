@@ -26,7 +26,7 @@ import numpy as np
 import pandas as pd
 
 from safe.config import DEFAULT_Z_THRESHOLD, HARD_BOUNDS
-from safe.stats import sample_comparison
+from safe.stats import sample_comparison, validate_alpha
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,8 @@ class PageHinkley:
     """
 
     def __init__(self, delta=0.25, lam=18.0):
+        if not np.isfinite(delta) or delta < 0 or not np.isfinite(lam) or lam <= 0:
+            raise ValueError("delta must be finite and nonnegative; lam must be finite and positive")
         self.delta = delta
         self.lam = lam
         self.reset()
@@ -77,6 +79,8 @@ class PageHinkley:
 
     def update(self, residual):
         """Feed one standardized residual; return 'up' / 'down' on alarm, else None."""
+        if not np.isfinite(residual):
+            raise ValueError("residual must be finite")
         self.samples += 1
 
         self._m_up += residual - self.delta
@@ -164,6 +168,15 @@ class SensorDrift:
     def __init__(self, window_size=200, z_threshold=DEFAULT_Z_THRESHOLD,
                  p_alpha=0.01, cooldown_seconds=1800, on_alert=None,
                  enable_page_hinkley=False, autocorr_correction=True):
+        if isinstance(window_size, bool) or not isinstance(window_size, (int, np.integer)) or window_size < MIN_HISTORY:
+            raise ValueError(f"window_size must be an integer >= {MIN_HISTORY}")
+        validate_alpha(p_alpha)
+        if not np.isfinite(z_threshold) or z_threshold <= 0:
+            raise ValueError("z_threshold must be finite and positive")
+        if not np.isfinite(cooldown_seconds) or cooldown_seconds < 0:
+            raise ValueError("cooldown_seconds must be finite and nonnegative")
+        if on_alert is not None and not callable(on_alert):
+            raise ValueError("on_alert must be callable")
         self.window_size = window_size
         self.z_threshold = z_threshold
         self.p_alpha = p_alpha
@@ -172,10 +185,11 @@ class SensorDrift:
         self.enable_page_hinkley = enable_page_hinkley
         self.autocorr_correction = autocorr_correction
 
-        self.hard_bounds = HARD_BOUNDS
+        self.hard_bounds = HARD_BOUNDS.copy()
         self.alerts = []                  # (sensor, alert_dict, data_time) history
         self._states = {}                 # {sensor: {metric: _MetricState}}
         self._last_alert_time = {}
+        self._last_reading_time = {}
 
     # ------------------------------------------------------------------
     # alert plumbing
@@ -189,7 +203,7 @@ class SensorDrift:
 
     def _alert_cooldown(self, sensor_name, metric, alert_type, current_timestamp):
         """True when an alert of this type may fire (and record that it did)."""
-        key = f"{sensor_name}_{metric}_{alert_type}"
+        key = (sensor_name, metric, alert_type)
         last_time = self._last_alert_time.get(key)
         if last_time is not None and current_timestamp - last_time < self.cooldown_seconds:
             return False
@@ -225,8 +239,20 @@ class SensorDrift:
             dt = sensor_dict.get('dateTime')
             if dt is None:
                 return
-            current_timestamp = pd.to_datetime(dt).timestamp()
+            parsed = pd.to_datetime(dt, utc=True)
+            if pd.isna(parsed):
+                raise ValueError("dateTime must be a valid timestamp")
+            current_timestamp = parsed.timestamp()
             data_time_str = str(dt)
+
+        current_timestamp = float(current_timestamp)
+        if not np.isfinite(current_timestamp):
+            raise ValueError("unix_timestamp must be finite")
+
+        previous = self._last_reading_time.get(sensor_name)
+        if previous is not None and current_timestamp < previous:
+            raise ValueError(f"out-of-order reading for {sensor_name}")
+        self._last_reading_time[sensor_name] = current_timestamp
 
         for key, val in sensor_dict.items():
             if key in ("dateTime", "unix_timestamp", "str_timestamp"):
@@ -244,6 +270,9 @@ class SensorDrift:
         # ---- layer 1: hard physical bounds -----------------------------
         bounds = self.hard_bounds.get(metric)
         if bounds and (value < bounds[0] or value > bounds[1]):
+            state = self._states.get(sensor_name, {}).get(metric)
+            if state is not None:
+                state.outliers.clear()
             if self._alert_cooldown(sensor_name, metric, "hard-bounds", current_timestamp):
                 self._emit(sensor_name, {
                     "alert": "hard-bounds-violation",
@@ -279,6 +308,9 @@ class SensorDrift:
 
             # ---- layer 2: robust (median/MAD) z-score outlier check ----
             if abs(residual) > self.z_threshold:
+                # Alternating high/low spikes are not a sustained level shift.
+                if state.outliers and (state.outliers[-1] - state.baseline_median) * residual < 0:
+                    state.outliers.clear()
                 state.outliers.append(value)
 
                 # ---- layer 3: consecutive outliers = step change -------

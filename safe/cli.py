@@ -76,6 +76,15 @@ def main(argv=None):
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
+    try:
+        return _run(args)
+    except (ValueError, OSError) as exc:
+        logger = logging.getLogger(__name__)
+        logger.error("%s", exc)
+        return 1
+
+
+def _run(args):
     if args.command == "stream":
         from safe.engine import SensorDrift
         from safe.loader import replay_csvs

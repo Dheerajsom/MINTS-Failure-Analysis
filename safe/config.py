@@ -34,6 +34,9 @@ HARD_BOUNDS = {
     **{pc: PC_BOUNDS for pc in PC_METRICS},
 }
 
+# Device associated with the historical short display name.
+SENSOR_DISPLAY_DEVICES = {'IPS7100MHC001': '001e064a1520'}
+
 # --------------------------------------------------------------------------
 # Practical-significance gates (shared by streaming + period analysis)
 # --------------------------------------------------------------------------

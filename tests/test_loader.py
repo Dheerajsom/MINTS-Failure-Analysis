@@ -40,7 +40,7 @@ class TestLoadPivotedDataframe:
 
     def test_sensor_display_name_mapping(self, sample_csv):
         df, _ = load_pivoted_dataframe(sample_csv)
-        assert (df["_sensor_name"] == "IPS7100_MHC_001").all()
+        assert (df["_sensor_name"] == "IPS7100_MHC_001_dev1").all()
 
     def test_unknown_measurement_fallback_name(self, tmp_path):
         csv = write_influx_csv(tmp_path / "u.csv",

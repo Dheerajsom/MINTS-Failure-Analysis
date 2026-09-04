@@ -14,7 +14,7 @@ import pandas as pd
 
 from safe.config import HARD_BOUNDS
 from safe.loader import load_pivoted_dataframe
-from safe.stats import sample_comparison
+from safe.stats import sample_comparison, validate_alpha
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,7 @@ CSV_COLUMNS = [
 def apply_hard_bounds(df, metric_cols):
     """NaN out physically impossible readings so they never enter the stats."""
     for metric in metric_cols:
+        df.loc[~np.isfinite(df[metric]), metric] = np.nan
         bounds = HARD_BOUNDS.get(metric)
         if bounds:
             lo, hi = bounds
@@ -79,7 +80,11 @@ def comparison_row(sensor, metric, granularity, old_label, new_label, old_vals, 
 def bucketize(series, freq, min_samples):
     """Return [(period_timestamp, values_array), ...] for non-empty calendar
     buckets, in time order, keeping only buckets with >= min_samples readings."""
-    series = series.dropna().sort_index()
+    if isinstance(min_samples, bool) or not isinstance(min_samples, (int, np.integer)) or min_samples < 2:
+        raise ValueError("min_samples must be an integer >= 2")
+    series = series[np.isfinite(series)]
+    if not series.index.is_monotonic_increasing:
+        series = series.sort_index(kind='stable')
     buckets = []
     for period, vals in series.resample(freq):
         if len(vals) >= min_samples:
@@ -130,6 +135,9 @@ def run_period_analysis(file_path, output_dir, p_alpha=0.01, min_samples=2, make
     """Run all period comparisons on a CSV and write period_*.csv into output_dir.
 
     Returns True on success, False when the input CSV could not be loaded."""
+    validate_alpha(p_alpha)
+    if isinstance(min_samples, bool) or not isinstance(min_samples, (int, np.integer)) or min_samples < 2:
+        raise ValueError("min_samples must be an integer >= 2")
     df, metric_cols = load_pivoted_dataframe(file_path)
     if df is None:
         return False
@@ -162,8 +170,9 @@ def run_period_analysis(file_path, output_dir, p_alpha=0.01, min_samples=2, make
             from safe.plotting import run_all_plotting
             plots_dir = os.path.join(output_dir, "plots")
             print("\nAuto-generating period plots...")
-            run_all_plotting(output_dir, plots_dir)
+            run_all_plotting(output_dir, plots_dir, p_alpha=p_alpha)
         except Exception as plot_err:
             print(f"Failed to auto-generate plots: {plot_err}")
+            return False
 
     return True

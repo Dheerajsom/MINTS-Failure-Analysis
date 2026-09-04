@@ -39,4 +39,4 @@ if __name__ == "__main__":
     logger.info(f"Current Working Directory: {os.getcwd()}")
     logger.info(f"Resolved Data File Path: {data_file}")
 
-    replay_csv(data_file)
+    sys.exit(0 if replay_csv(data_file) is not None else 1)

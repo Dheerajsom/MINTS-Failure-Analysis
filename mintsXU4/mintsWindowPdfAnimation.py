@@ -113,6 +113,8 @@ def load_field_series(csv_path, field):
     if field not in metric_cols:
         raise ValueError(f"Requested field '{field}' was not found in {csv_path}. Available fields: {metric_cols}")
 
+    if df["_sensor_name"].nunique() != 1:
+        raise ValueError("Animation requires a single sensor export")
     series = pd.to_numeric(df[field], errors="coerce").dropna().sort_index()
     low, high = field_bounds(field)
     series = series[(series >= low) & (series <= high)]
@@ -160,7 +162,8 @@ def load_field_series_from_dir(data_dir, field):
     idx = pd.to_datetime(raw["_time"], utc=True, errors="coerce")
     values = pd.to_numeric(raw["_value"], errors="coerce")
     series = pd.Series(values.to_numpy(), index=idx, name=field)
-    series = series[series.index.notna()].dropna().sort_index()
+    series = series[series.index.notna()].dropna()
+    series = series[~series.index.duplicated(keep="first")].sort_index()
 
     low, high = field_bounds(field)
     series = series[(series >= low) & (series <= high)]
@@ -170,6 +173,10 @@ def load_field_series_from_dir(data_dir, field):
 
 
 def frame_times(series, step_minutes, max_frames):
+    if max_frames is not None and max_frames < 1:
+        raise ValueError("max_frames must be positive")
+    if not np.isfinite(step_minutes):
+        raise ValueError("step_minutes must be finite")
     start = series.index.min()
     end = series.index.max()
     step = pd.Timedelta(minutes=step_minutes)
@@ -188,7 +195,9 @@ def frame_times(series, step_minutes, max_frames):
 
 def window_values(series, end_time):
     start_time = end_time - WINDOW
-    return series.loc[(series.index > start_time) & (series.index <= end_time)]
+    left = series.index.searchsorted(start_time, side="right")
+    right = series.index.searchsorted(end_time, side="right")
+    return series.iloc[left:right]
 
 
 def make_animation(series, times, out_path, fps, dpi, background_points, metadata: FieldMetadata):

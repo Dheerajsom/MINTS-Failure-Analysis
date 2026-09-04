@@ -152,6 +152,21 @@ for sensor_name, alert, timestamp in engine.alerts:
 with their own logger, database writer, or MQTT publisher without changing
 SAFE's analysis code.
 
+Inputs use ISO timestamps; naive timestamps are interpreted as UTC. Invalid
+timestamps, missing identifiers and nonfinite readings are discarded with a
+warning. Duplicate readings at the same UTC instant keep the first valid value.
+Other devices sharing the bundled measurement receive a device-ID suffix so
+their baselines remain separate. Replay files must be chronological and
+non-overlapping; out-of-order readings fail the replay. `replay_csv` returns
+`None` on load or processing failure, with partial state retained in a supplied
+engine. The CLI returns a nonzero exit code for these failures.
+
+`SensorDrift` requires an integer window of at least 30 readings, positive finite
+z threshold, significance level strictly between 0 and 1, and nonnegative finite
+cooldown. `sample_comparison` requires finite one-dimensional samples of at least
+two readings each. AR(1) correction and thinning are approximations; they do not
+remove seasonal confounding or establish that a detected change is a sensor fault.
+
 ## Period analysis and outputs
 
 `safe periods` filters physically impossible values, then compares consecutive
@@ -163,6 +178,13 @@ Cohen's *d*, p-values, and boolean mean/variance drift flags.
 Plots are written below `mintsXU4/output/plots/` by default. The standard
 multi-panel report focuses on `pm1_0`, `temperature`, and `pressure`; all
 available metrics remain present in the generated CSV reports.
+
+Plots honor `--alpha`, isolate different sensors in numbered subdirectories when
+necessary, and propagate rendering failures to the command's exit status.
+The separate distribution visualizers are exploratory tools for a single sensor:
+their nominal two-sample p-values do not apply SAFE's autocorrelation or effect-size
+gates. The normality visualizer reports the KS distance without a p-value because
+standardization estimates the mean and spread from the tested sample.
 
 Treat `mintsXU4/output/` as generated output. Regenerate it from the source
 data and scripts instead of editing its CSVs or images by hand.
@@ -191,6 +213,11 @@ archive; a missing source or absent requested field produces an error listing
 the expected path or available fields.
 
 ## High-resolution and legacy utilities
+
+Install `pip install -e ".[video]"` for FFmpeg-backed video scripts. The development
+extra includes this dependency for video helper tests. PM regeneration preserves
+existing outputs and overwrites only the files it generates. The wide PM pickle
+cache is trusted local data; rebuild it when source files change.
 
 - [`mintsInfluxDownloader.py`](mintsInfluxDownloader.py) downloads large PM
   histories from InfluxDB in resumable chunks. It reads credentials from

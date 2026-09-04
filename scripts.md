@@ -16,7 +16,7 @@ source .venv/bin/activate          # PowerShell: .venv\Scripts\Activate.ps1
 pip install -e ".[dev]"            # safe package + CLI + pytest
 pip install -e ".[sensor]"         # only if you need the live-node serial/MQTT scripts
 
-python -m pytest tests/            # sanity check — should be all green (58 tests as of 2026-07)
+python -m pytest tests/            # full regression suite
 ```
 
 ## 1. The data
@@ -78,7 +78,7 @@ python -m safe.cli stream mintsXU4/data/valo_node_01_1s --metric pm1_0 --window 
 > `--window 7200` (2 hours of 1s data) matters, not just a knob: `window=200`
 > (the CLI default) is far too short at 1s resolution for the windowed
 > Welch/Levene drift test to ever fire — lag-1 autocorrelation is ~0.98, so a
-> 200-sample window carries only ~2 effective independent observations.
+> 200-sample window has two 100-reading halves, each carrying only ~1 effective observation.
 
 If `safe` isn't on `PATH` (e.g. Git Bash on some setups), use
 `python -m safe.cli` as above instead of the bare `safe` command.

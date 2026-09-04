@@ -40,6 +40,19 @@ MIN_EFFECTIVE_N = 3.0
 MAX_RHO = 0.98
 
 
+def validate_alpha(p_alpha):
+    """Reject invalid significance levels before any data or output work."""
+    if not np.isfinite(p_alpha) or not 0 < p_alpha < 1:
+        raise ValueError("p_alpha must be finite and strictly between 0 and 1")
+
+
+def _sample(values):
+    values = np.asarray(values, dtype=float)
+    if values.ndim != 1 or not np.isfinite(values).all():
+        raise ValueError("samples must be one-dimensional and contain only finite values")
+    return values
+
+
 def lag1_autocorrelation(x):
     """Lag-1 autocorrelation of a 1-D array, clipped to [0, MAX_RHO].
 
@@ -47,7 +60,7 @@ def lag1_autocorrelation(x):
     n_eff above n, and we only ever want the conservative correction.
     Returns 0.0 when the series is too short or flat for a stable estimate.
     """
-    x = np.asarray(x, dtype=float)
+    x = _sample(x)
     if x.size < 10:
         return 0.0
     a, b = x[:-1], x[1:]
@@ -98,8 +111,9 @@ def _thin(x, n_eff):
 def _levene_test(old, new, n_eff_old, n_eff_new):
     """Brown-Forsythe (median-centered) Levene test on thinned samples.
 
-    Thinning to ~n_eff readings per side removes most serial correlation, so
-    the resulting p-value is honest rather than saturated.
+    Thinning to ~n_eff readings per side reduces serial correlation under an
+    AR(1) approximation. It does not guarantee independent observations for
+    seasonal, irregularly sampled, or higher-order processes.
     """
     if n_eff_old < MIN_EFFECTIVE_N or n_eff_new < MIN_EFFECTIVE_N:
         return 1.0
@@ -130,8 +144,11 @@ def sample_comparison(old, new, p_alpha=0.01, metric=None, autocorr_correction=T
     A shift is only flagged when it is BOTH statistically significant at the
     (corrected) p_alpha AND large enough to matter (effect-size gates).
     """
-    old = np.asarray(old, dtype=float)
-    new = np.asarray(new, dtype=float)
+    validate_alpha(p_alpha)
+    old = _sample(old)
+    new = _sample(new)
+    if old.size < 2 or new.size < 2:
+        raise ValueError("each sample must contain at least two readings")
 
     n_old = int(old.size)
     n_new = int(new.size)

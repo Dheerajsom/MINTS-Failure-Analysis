@@ -19,7 +19,9 @@ under `mintsXU4/output/`.
 pip install -e ".[dev]"
 ```
 
-Core dependencies: `numpy`, `scipy`, `pandas`, `matplotlib`. The `sensor`
+Core dependencies: `numpy`, `scipy`, `pandas>=2.0`, `matplotlib`. The `video`
+extra installs `imageio-ffmpeg`; `dev` includes it because video helper tests
+import the rendering modules. The `sensor`
 extra adds the legacy live-node packages (`pyserial`, `paho-mqtt`, `pyyaml`, ...).
 
 ## Common Commands
@@ -63,6 +65,16 @@ The bundled CSV is an InfluxDB-style export. The loader expects `_time`,
 handles numeric coercion, duplicate removal, pivoting fields into metric
 columns, and timestamp normalization.
 
+Normalize ISO timestamps to UTC before deduplication; naive timestamps mean
+UTC. Discard nonfinite values and invalid timestamps/identifiers with a warning.
+Keep device IDs as strings (leading zeros matter). The historical sensor label
+is reserved for its configured device; other devices get an ID suffix.
+Replay files in chronological, non-overlapping order. A failed replay may leave
+partial state in a supplied engine and returns `None`; do not retry it blindly.
+`sample_comparison` expects finite 1-D samples with at least two readings each.
+The AR(1) correction is an approximation, not a guarantee of calibrated false
+positive rates for irregular sampling, seasonal cycles, or arbitrary processes.
+
 ## Output Notes
 
 Treat files under `mintsXU4/output/` as generated. Prefer regenerating outputs
@@ -90,3 +102,29 @@ Before handing off substantial changes:
 2. Run the relevant analysis or plotting script on the bundled CSV.
 3. Confirm outputs land in the expected `mintsXU4/output/` location.
 4. Check `git status --short` and call out generated files that changed.
+
+Run the full suite before changes as well as after them. For substantial
+analysis changes, run all five offline workflows listed under Common Commands.
+Check CSV schemas, finite probabilities/counts, PNG readability, and nonzero
+failure exit codes. For animation changes, run a short headless preview; full
+year video generation requires optional local archives and substantial memory.
+Never execute live sensor or downloader entry points as offline smoke tests.
+
+If tracked source data or generated outputs have pre-existing user changes,
+validate in an isolated temporary copy using the committed CSV. Keep the same
+`mintsXU4/output/` layout there, and record this deviation and the output path.
+Do not restore deleted user files or stage regenerated artifacts by default.
+Use a local `.venv`; if `python` is absent from PATH, use its explicit executable.
+
+## Git workflow
+
+- Inspect branch, status, and staged changes before editing; preserve unrelated
+  work. Stage explicit in-scope paths rather than `git add .` or `git add -A`.
+- Use the exact user-requested branch name; otherwise follow the configured
+  `codex/` branch prefix. Do not commit directly to `main`.
+- Commit/push when requested, configure upstream tracking, and do not force-push.
+- Before deleting a branch, fetch its remote state, verify it is not checked out
+  in any worktree, and prove both local and remote tips are ancestors of the
+  preserved branch. Inspect unique commits; never force-delete unmerged work.
+- Finish with `git status --short`, report the commit and push/deletion outcomes,
+  and identify pre-existing changes or remaining generated artifacts.
