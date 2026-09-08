@@ -21,7 +21,7 @@ _REPO_ROOT = str(Path(__file__).resolve().parents[1])
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-_CACHE_DIR = Path(tempfile.gettempdir()) / "mints_failure_analysis_matplotlib"
+_CACHE_DIR = Path(tempfile.gettempdir()) / "safe_matplotlib"
 os.environ.setdefault("MPLCONFIGDIR", str(_CACHE_DIR / "matplotlib"))
 os.environ.setdefault("XDG_CACHE_HOME", str(_CACHE_DIR / "xdg"))
 

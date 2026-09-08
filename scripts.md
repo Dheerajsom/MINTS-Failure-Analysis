@@ -1,4 +1,4 @@
-# SAFE / MINTS-Failure-Analysis — terminal cheat sheet
+# SAFE — terminal cheat sheet
 
 Reference for running this repo's **1-second PM/PC data** workflows on a fresh
 machine. All commands assume you're in the repo root unless noted.
@@ -7,8 +7,8 @@ PowerShell is called out separately wherever its syntax differs from bash.
 ## 0. Setup
 
 ```bash
-git clone <repo-url> MINTS-Failure-Analysis
-cd MINTS-Failure-Analysis
+git clone <repo-url> SAFE
+cd SAFE
 
 python -m venv .venv
 source .venv/bin/activate          # PowerShell: .venv\Scripts\Activate.ps1

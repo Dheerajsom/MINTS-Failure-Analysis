@@ -22,7 +22,7 @@ import os
 import tempfile
 from pathlib import Path
 
-_CACHE_DIR = Path(tempfile.gettempdir()) / "mints_failure_analysis_matplotlib"
+_CACHE_DIR = Path(tempfile.gettempdir()) / "safe_matplotlib"
 os.environ.setdefault("MPLCONFIGDIR", str(_CACHE_DIR / "matplotlib"))
 os.environ.setdefault("XDG_CACHE_HOME", str(_CACHE_DIR / "xdg"))
 
