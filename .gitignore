@@ -24,5 +24,6 @@ dist/
 
 # Local environments and credentials
 .venv/
+evaluation_output/
 mintsXU4/credentials/
 mintsXU4/credentials.yml
