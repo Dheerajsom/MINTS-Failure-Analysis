@@ -16,14 +16,22 @@ from safe.engine import PageHinkley, SensorDrift
 from safe.loader import load_pivoted_dataframe, replay_csv
 from safe.periods import run_period_analysis
 from safe.stats import effective_sample_size, sample_comparison
+from safe.health import SensorHealth
+from safe.incidents import HealthEvent
+from safe.profiles import MetricProfile, ProfileRegistry, SensorRules
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 
 __all__ = [
     "HARD_BOUNDS",
     "FieldMetadata",
     "PageHinkley",
     "SensorDrift",
+    "SensorHealth",
+    "HealthEvent",
+    "MetricProfile",
+    "ProfileRegistry",
+    "SensorRules",
     "effective_sample_size",
     "field_metadata",
     "load_pivoted_dataframe",

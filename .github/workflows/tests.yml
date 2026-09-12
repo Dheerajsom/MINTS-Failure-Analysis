@@ -1,0 +1,24 @@
+name: SAFE verification
+on:
+  push:
+  pull_request:
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m venv .venv
+      - run: .venv/bin/python -m pip install -e '.[dev]'
+      - run: .venv/bin/python -m pytest tests/
+      - run: .venv/bin/python scripts/evaluate_health.py --require-targets
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: health-evaluation-${{ matrix.python }}
+          path: evaluation_output/health/

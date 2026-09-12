@@ -8,6 +8,12 @@ complementary workflows:
 - **Period analysis:** compare calendar periods to produce CSV summaries and
   static plots for investigation and reporting.
 
+SAFE 2 also provides **sensor-health incidents** through `SensorHealth` and
+`safe health`: correlated evidence, freeze/silence detection, environmental
+residuals, profile configuration, and restart-safe state. See the
+[health guide](docs/health.md) and [pilot results](docs/health-pilot.md).
+The legacy streaming and period workflows below retain their behavior.
+
 The maintained implementation is the [`safe/`](safe/) package. The
 [`mintsXU4/`](mintsXU4/) directory retains compatibility entry points and older
 live-node utilities.
@@ -16,6 +22,9 @@ live-node utilities.
 
 ```bash
 pip install -e ".[dev]"
+
+# Analyze sensor health with incidents and save a restart checkpoint
+safe health mintsXU4/data/valo_node_01_full_year.csv --config docs/health-config.json --state-out mintsXU4/output/health/state.json
 
 # Replay the bundled InfluxDB export through the streaming engine
 safe stream mintsXU4/data/valo_node_01_full_year.csv
